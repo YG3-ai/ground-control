@@ -1,0 +1,4 @@
+Licensed stock b-roll (Getty Images item 4095629 / delivery ref 1198841250).
+Abstract 3D particle brain on black — LIVE HUD uses letterbox brain-core-stock.mp4 (720×406) + poster.
+Offline tight derivative: brain-core-stock-tight.mp4 (scripts/reframe-brain-core-stock.mjs; not wired until validated).
+Do not embed download URLs in client code.

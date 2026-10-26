@@ -1,0 +1,38 @@
+{
+  "name": "@agent-control/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist/local && cp src/local/whiteboard.html dist/local/whiteboard.html",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node --import tsx src/cli.ts",
+    "test": "vitest run",
+    "test:isolation": "vitest run src/isolation.docker.test.ts"
+  },
+  "dependencies": {
+    "@agent-control/shared": "*",
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.5.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.2",
+    "yaml": "^2.8.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.30",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.3"
+  }
+}

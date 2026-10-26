@@ -1,0 +1,55 @@
+owner:
+  id: "owner-local"
+  display_name: "Local Owner"
+
+relay:
+  url: "wss://your-relay.example.com/worker"
+
+worker:
+  data_dir: "./data/worker"
+  policy_dir: "./data/policy"
+  max_output_bytes: 262144
+  default_timeout_sec: 1800
+  agent_execution: host
+  allowed_roots:
+    - ~/Projects
+    - ~/Developer
+  terminal_sessions:
+    default_idle_sec: 3600
+    default_cols: 120
+    default_rows: 40
+  isolation:
+    backend: "docker"
+    image: "agent-control-mock:local"
+    network: "none"
+    run_as_user: "1000:1000"
+    read_only_rootfs: true
+    memory_mb: 1024
+    cpus: 2
+
+supervisor:
+  enabled: false
+
+agents:
+  mock:
+    enabled: true
+    adapter: mock
+  cursor:
+    enabled: true
+    adapter: cursor
+    binary: /Users/YOU/.local/bin/agent
+  kimi:
+    enabled: true
+    adapter: kimi
+    binary: /Users/YOU/.kimi-code/bin/kimi
+
+projects:
+  - id: "demo-sandbox"
+    name: "Demo Sandbox"
+    source_path: "./fixtures/demo-sandbox"
+    allowed_agents: ["mock"]
+    permissions:
+      network: "none"
+      git_write: true
+      max_runtime_sec: 300
+    credentials: []

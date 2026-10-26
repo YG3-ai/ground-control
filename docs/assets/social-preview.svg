@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Ground Control">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0c10"/>
+      <stop offset="55%" stop-color="#12151c"/>
+      <stop offset="100%" stop-color="#1a2333"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <circle cx="980" cy="120" r="220" fill="#2563eb" opacity="0.12"/>
+  <circle cx="200" cy="520" r="180" fill="#6d28d9" opacity="0.1"/>
+  <text x="96" y="200" fill="#f5f5f7" font-family="system-ui,-apple-system,sans-serif" font-size="72" font-weight="700">Ground Control</text>
+  <text x="96" y="268" fill="#a8b4c8" font-family="system-ui,-apple-system,sans-serif" font-size="32" font-weight="500">Turn your Mac into your team on the ground.</text>
+  <rect x="96" y="320" width="280" height="52" rx="26" fill="url(#accent)"/>
+  <text x="236" y="354" text-anchor="middle" fill="#ffffff" font-family="system-ui,-apple-system,sans-serif" font-size="22" font-weight="600">Install on Mac</text>
+  <text x="96" y="420" fill="#6d7a90" font-family="system-ui,-apple-system,sans-serif" font-size="18" letter-spacing="0.12em">DEMO DATA</text>
+</svg>

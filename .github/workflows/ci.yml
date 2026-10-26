@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, "feat/**"]
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run test:setup
+      - run: npm run test:release
+      - run: npm run check:release
+      - run: npm run check:dependency-licenses
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Relay privacy and YG3 tests
+        run: |
+          cd packages/relay
+          npx vitest run src/board-public-http.test.ts src/board-public-board.test.ts src/board-extensions/yg3-sync.test.ts src/yg3-mcp/
+      - run: npm run stage:release-candidate

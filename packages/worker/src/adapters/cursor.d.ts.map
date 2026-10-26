@@ -1,0 +1,1 @@
+{"version":3,"file":"cursor.d.ts","sourceRoot":"","sources":["cursor.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,YAAY,EAAE,cAAc,EAAE,WAAW,EAAE,MAAM,YAAY,CAAC;AAE5E;;;;;;;;;;GAUG;AACH,qBAAa,aAAc,YAAW,YAAY;IAChD,QAAQ,CAAC,IAAI,EAAG,QAAQ,CAAU;IAClC,QAAQ,CAAC,mBAAmB,SAAS;IAErC,IAAI,CAAC,GAAG,EAAE,cAAc,GAAG,WAAW;CAwDvC"}

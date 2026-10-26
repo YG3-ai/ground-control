@@ -1,0 +1,47 @@
+{
+  "name": "agent-control",
+  "private": true,
+  "version": "0.1.0",
+  "license": "PolyForm-Shield-1.0.0",
+  "description": "Personal agent control: ChatGPT coordinates Cursor/Kimi on your Mac via owned MCP relay",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "bash ./scripts/fix-node-pty.sh",
+    "build": "npm run build -w @agent-control/shared && npm run build -w @agent-control/worker && npm run build -w @agent-control/relay",
+    "test": "npm run test -w @agent-control/shared && npm run test -w @agent-control/worker && npm run test -w @agent-control/relay",
+    "test:isolation": "npm run test:isolation -w @agent-control/worker",
+    "backfill:events": "node --import tsx packages/worker/src/backfill-cli.ts",
+    "worker": "npm run start -w @agent-control/worker",
+    "relay": "npm run start -w @agent-control/relay",
+    "typecheck": "npm run typecheck -w @agent-control/shared && npm run typecheck -w @agent-control/worker && npm run typecheck -w @agent-control/relay",
+    "test:release": "node --test scripts/check-release-safety.test.mjs",
+    "check:release": "node scripts/check-release-safety.mjs",
+    "stage:release-candidate": "node scripts/stage-release-candidate.mjs",
+    "check:dependency-licenses": "node scripts/check-dependency-licenses.mjs",
+    "bootstrap": "bash ./scripts/bootstrap.sh",
+    "setup:mac": "node scripts/setup-mac.mjs",
+    "setup:mac:uninstall-yg3-sync": "bash scripts/uninstall-yg3-sync-launchagent.sh",
+    "prepare:yg3-launchagent": "bash scripts/prepare-yg3-launchagent.sh",
+    "doctor": "node scripts/doctor.mjs",
+    "verify:local": "node scripts/verify-local.mjs",
+    "yg3:login": "node --import tsx packages/relay/src/yg3-mcp/login-cli.ts",
+    "test:setup": "node --test scripts/doctor.test.mjs scripts/bootstrap.test.mjs scripts/verify-local.test.mjs scripts/load-local-env.test.mjs scripts/setup-mac.test.mjs scripts/worker-instance-lock.test.mjs scripts/groundcontrol-launchagents.test.mjs",
+    "yg3:probe": "node --import tsx packages/relay/src/yg3-mcp/connect-probe-cli.ts",
+    "yg3:sync": "node --import tsx packages/relay/src/yg3-mcp/sync-cli.ts",
+    "yg3:sync-followup": "node --import tsx packages/relay/src/yg3-mcp/followup-sync-cli.ts",
+    "yg3:reproject": "node --import tsx packages/relay/src/yg3-mcp/reproject-cli.ts",
+    "yg3:sync-verified": "node --import tsx packages/relay/src/yg3-mcp/verified-sync-cli.ts",
+    "yg3:sync-background": "node --import tsx packages/relay/src/yg3-mcp/background-sync-cli.ts",
+    "yg3:sync-media": "node --import tsx packages/relay/src/yg3-mcp/media-sync-cli.ts",
+    "yg3:workspaces:search": "node --import tsx packages/relay/src/yg3-mcp/workspaces-search-cli.ts",
+    "yg3:workspaces:status": "node --import tsx packages/relay/src/yg3-mcp/workspace-status-cli.ts",
+    "yg3:select": "node --import tsx packages/relay/src/yg3-mcp/workspace-select-cli.ts",
+    "yg3:sync-final": "node --import tsx packages/relay/src/yg3-mcp/final-sync-cli.ts",
+    "yg3:purge-raw": "node --import tsx scripts/purge-yg3-raw-cache.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

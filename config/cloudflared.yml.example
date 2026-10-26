@@ -1,0 +1,13 @@
+# Copy to ~/.cloudflared/config.yml after tunnel login and tunnel create.
+# Do not commit credentials or tunnel UUIDs to git.
+#
+# Hostname: set only after listing zones in your Cloudflare account and
+# choosing a subdomain (placeholder below).
+
+tunnel: TUNNEL_UUID_PLACEHOLDER
+credentials-file: $HOME/.cloudflared/TUNNEL_UUID_PLACEHOLDER.json
+
+ingress:
+  - hostname: ground.YOUR_VERIFIED_ZONE_PLACEHOLDER
+    service: http://127.0.0.1:8787
+  - service: http_status:404

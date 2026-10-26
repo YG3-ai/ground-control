@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security
+    url: https://github.com
+    about: See SECURITY.md for reporting instructions until the public repository is linked here.
