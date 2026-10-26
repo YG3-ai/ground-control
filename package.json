@@ -15,7 +15,7 @@
     "backfill:events": "node --import tsx packages/worker/src/backfill-cli.ts",
     "worker": "npm run start -w @agent-control/worker",
     "relay": "npm run start -w @agent-control/relay",
-    "typecheck": "npm run typecheck -w @agent-control/shared && npm run typecheck -w @agent-control/worker && npm run typecheck -w @agent-control/relay",
+    "typecheck": "npm run typecheck -w @agent-control/shared && npm run build -w @agent-control/shared && npm run typecheck -w @agent-control/worker && npm run typecheck -w @agent-control/relay",
     "test:release": "node --test scripts/check-release-safety.test.mjs",
     "check:release": "node scripts/check-release-safety.mjs",
     "stage:release-candidate": "node scripts/stage-release-candidate.mjs",
