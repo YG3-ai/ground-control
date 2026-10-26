@@ -15,7 +15,14 @@ import { createYg3ReadonlyMcpClient } from "./factory.js";
 import { runYg3LoginFlow } from "./login-flow.js";
 import { Yg3MetadataStore } from "./metadata-store.js";
 import { Yg3OAuthProvider } from "./oauth-provider.js";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -74,7 +81,11 @@ describe("YG3 MCP foundation", () => {
 
   it("resolves monorepo root from relay yg3 module", () => {
     const root = resolveRepoRootFromRelayModule(import.meta.url);
-    expect(root).toMatch(/agent-control$/);
+    const pkgPath = join(root, "package.json");
+    expect(existsSync(pkgPath)).toBe(true);
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    expect(pkg.name).toBe("agent-control");
+    expect(existsSync(join(root, "packages", "relay"))).toBe(true);
   });
 
   it("resolves legacy oauth metadata path when canonical missing", () => {
