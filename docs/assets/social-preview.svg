@@ -1,21 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Ground Control">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Ground Control — Turn your Mac into your team on the ground.">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0b0c10"/>
-      <stop offset="55%" stop-color="#12151c"/>
-      <stop offset="100%" stop-color="#1a2333"/>
+      <stop offset="0%" stop-color="#060b14"/>
+      <stop offset="45%" stop-color="#0c1528"/>
+      <stop offset="100%" stop-color="#101f38"/>
     </linearGradient>
-    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#2563eb"/>
-      <stop offset="100%" stop-color="#6d28d9"/>
+    <linearGradient id="cyanGlow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
     </linearGradient>
+    <radialGradient id="halo" cx="78%" cy="42%" r="45%">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="iconShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#22d3ee" flood-opacity="0.35"/>
+    </filter>
   </defs>
   <rect width="1280" height="640" fill="url(#bg)"/>
-  <circle cx="980" cy="120" r="220" fill="#2563eb" opacity="0.12"/>
-  <circle cx="200" cy="520" r="180" fill="#6d28d9" opacity="0.1"/>
-  <text x="96" y="200" fill="#f5f5f7" font-family="system-ui,-apple-system,sans-serif" font-size="72" font-weight="700">Ground Control</text>
-  <text x="96" y="268" fill="#a8b4c8" font-family="system-ui,-apple-system,sans-serif" font-size="32" font-weight="500">Turn your Mac into your team on the ground.</text>
-  <rect x="96" y="320" width="280" height="52" rx="26" fill="url(#accent)"/>
-  <text x="236" y="354" text-anchor="middle" fill="#ffffff" font-family="system-ui,-apple-system,sans-serif" font-size="22" font-weight="600">Install on Mac</text>
-  <text x="96" y="420" fill="#6d7a90" font-family="system-ui,-apple-system,sans-serif" font-size="18" letter-spacing="0.12em">DEMO DATA</text>
+  <rect width="1280" height="640" fill="url(#halo)"/>
+  <!-- command grid -->
+  <g stroke="#22d3ee" stroke-opacity="0.08" stroke-width="1">
+    <path d="M0 120 H1280 M0 240 H1280 M0 360 H1280 M0 480 H1280"/>
+    <path d="M160 0 V640 M320 0 V640 M480 0 V640 M640 0 V640 M800 0 V640 M960 0 V640 M1120 0 V640"/>
+  </g>
+  <circle cx="1040" cy="96" r="200" fill="#0ea5e9" opacity="0.06"/>
+  <circle cx="120" cy="560" r="160" fill="#22d3ee" opacity="0.05"/>
+  <line x1="88" y1="88" x2="168" y2="88" stroke="#c9a227" stroke-width="3" stroke-opacity="0.85"/>
+  <image xlink:href="../../apps/menu-bar/Resources/AppIcon.iconset/icon_256x256@2x.png" x="88" y="108" width="200" height="200" filter="url(#iconShadow)" preserveAspectRatio="xMidYMid meet"/>
+  <text x="320" y="200" fill="#f4f7fb" font-family="system-ui,-apple-system,BlinkMacSystemFont,sans-serif" font-size="68" font-weight="700" letter-spacing="-0.02em">Ground Control</text>
+  <text x="320" y="268" fill="#9eb4cc" font-family="system-ui,-apple-system,BlinkMacSystemFont,sans-serif" font-size="30" font-weight="500">Turn your Mac into your team on the ground.</text>
+  <rect x="320" y="310" width="300" height="52" rx="26" fill="url(#cyanGlow)"/>
+  <text x="470" y="344" text-anchor="middle" fill="#041018" font-family="system-ui,-apple-system,BlinkMacSystemFont,sans-serif" font-size="21" font-weight="700">Install on Mac</text>
+  <text x="320" y="410" fill="#c9a227" font-family="system-ui,-apple-system,BlinkMacSystemFont,sans-serif" font-size="17" font-weight="600" letter-spacing="0.14em">MACOS · LOCAL FIRST · SOURCE AVAILABLE</text>
+  <text x="320" y="448" fill="#6d849c" font-family="system-ui,-apple-system,BlinkMacSystemFont,sans-serif" font-size="18">ground-control.yg3sites.com</text>
 </svg>
