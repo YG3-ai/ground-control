@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-export type UsageAgent = "cursor" | "kimi";
+export type UsageAgent = "cursor" | "kimi" | "codex";
 
 export type UsageEvent = {
   id: number;
@@ -59,6 +59,19 @@ export const DEFAULT_KIMI_POLICY: AgentUsagePolicy = {
   implement_model: "kimi-code/k3-256k",
   research_mode: null,
   cooldown_after_rate_limit_sec: 30 * 60,
+};
+
+/** Conservative defaults for ChatGPT-plan-backed Codex CLI usage. */
+export const DEFAULT_CODEX_POLICY: AgentUsagePolicy = {
+  window_sec: 5 * 3600,
+  max_starts_per_window: 30,
+  min_gap_sec: 30,
+  max_concurrent: 1,
+  default_model: null,
+  research_model: null,
+  implement_model: null,
+  research_mode: null,
+  cooldown_after_rate_limit_sec: 10 * 60,
 };
 
 function nowIso(): string {

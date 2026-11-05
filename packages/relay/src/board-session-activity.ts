@@ -8,7 +8,7 @@ export type TerminalSessionRow = {
   last_activity_at?: string;
 };
 
-const ACTIVE_AGENT_KIND = new Set(["cursor", "kimi", "agent", "claude"]);
+const ACTIVE_AGENT_KIND = new Set(["cursor", "kimi", "codex", "agent", "claude"]);
 
 /** Staleness window for agent PTY cognitive activity (worker last_activity_at). */
 export const COGNITIVE_TERMINAL_ACTIVITY_MS = 120_000;

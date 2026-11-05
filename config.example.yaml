@@ -27,7 +27,7 @@ worker:
     memory_mb: 1024
     cpus: 2
 
-supervisor:
+advisor:
   enabled: false
 
 agents:
@@ -42,6 +42,10 @@ agents:
     enabled: true
     adapter: kimi
     binary: /Users/YOU/.kimi-code/bin/kimi
+  codex:
+    enabled: true
+    adapter: codex
+    binary: /usr/local/bin/codex
 
 projects:
   - id: "demo-sandbox"

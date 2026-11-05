@@ -25,7 +25,10 @@ export type MissionRecord = {
   workspace: string | null;
   status: MissionStatus;
   plan: string | null;
+  plan_revision: number;
+  approved_revision: number | null;
   findings: string | null;
+  handoff: MissionHandoff | null;
   summary: string | null;
   linked_job_ids: string[];
   linked_session_ids: string[];
@@ -37,6 +40,14 @@ export type MissionRecord = {
   completed_at: string | null;
 };
 
+export type MissionHandoff = {
+  job_id: string;
+  agent: "mock" | "cursor" | "kimi" | "codex";
+  status: "succeeded" | "failed" | "cancelled" | "timed_out";
+  summary: string | null;
+  recorded_at: string;
+};
+
 type MissionRow = {
   id: string;
   owner_id: string;
@@ -45,7 +56,10 @@ type MissionRow = {
   workspace: string | null;
   status: string;
   plan: string | null;
+  plan_revision: number;
+  approved_revision: number | null;
   findings: string | null;
+  handoff: string | null;
   summary: string | null;
   linked_job_ids: string;
   linked_session_ids: string;
@@ -81,6 +95,16 @@ function parseMarkers(raw: string): MissionRecord["markers"] {
   return {};
 }
 
+function parseHandoff(raw: string | null): MissionHandoff | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as MissionHandoff;
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function rowToMission(row: MissionRow): MissionRecord {
   return {
     id: row.id,
@@ -90,7 +114,10 @@ function rowToMission(row: MissionRow): MissionRecord {
     workspace: row.workspace,
     status: row.status as MissionStatus,
     plan: row.plan,
+    plan_revision: row.plan_revision,
+    approved_revision: row.approved_revision,
     findings: row.findings,
+    handoff: parseHandoff(row.handoff),
     summary: row.summary,
     linked_job_ids: parseJsonArray(row.linked_job_ids),
     linked_session_ids: parseJsonArray(row.linked_session_ids),
@@ -124,7 +151,10 @@ export class MissionStore {
         workspace TEXT,
         status TEXT NOT NULL,
         plan TEXT,
+        plan_revision INTEGER NOT NULL DEFAULT 0,
+        approved_revision INTEGER,
         findings TEXT,
+        handoff TEXT,
         summary TEXT,
         linked_job_ids TEXT NOT NULL DEFAULT '[]',
         linked_session_ids TEXT NOT NULL DEFAULT '[]',
@@ -138,6 +168,32 @@ export class MissionStore {
         ON missions(owner_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS missions_owner_status
         ON missions(owner_id, status);
+    `);
+    const columns = new Set(
+      (this.db.pragma("table_info(missions)") as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    );
+    if (!columns.has("plan_revision")) {
+      this.db.exec(
+        "ALTER TABLE missions ADD COLUMN plan_revision INTEGER NOT NULL DEFAULT 0",
+      );
+    }
+    if (!columns.has("approved_revision")) {
+      this.db.exec("ALTER TABLE missions ADD COLUMN approved_revision INTEGER");
+    }
+    if (!columns.has("handoff")) {
+      this.db.exec("ALTER TABLE missions ADD COLUMN handoff TEXT");
+    }
+    this.db.exec(`
+      UPDATE missions
+      SET plan_revision = 1
+      WHERE plan IS NOT NULL AND plan_revision = 0;
+      UPDATE missions
+      SET approved_revision = plan_revision
+      WHERE status IN ('approved', 'implementing', 'verifying')
+        AND approved_at IS NOT NULL
+        AND approved_revision IS NULL;
     `);
   }
 
@@ -162,7 +218,10 @@ export class MissionStore {
       workspace: input.workspace?.slice(0, 500) ?? null,
       status: "intake",
       plan: null,
+      plan_revision: 0,
+      approved_revision: null,
       findings: null,
+      handoff: null,
       summary: null,
       linked_job_ids: [],
       linked_session_ids: [],
@@ -175,11 +234,13 @@ export class MissionStore {
     this.db
       .prepare(
         `INSERT INTO missions (
-          id, owner_id, title, goal, workspace, status, plan, findings, summary,
+          id, owner_id, title, goal, workspace, status, plan, plan_revision,
+          approved_revision, findings, handoff, summary,
           linked_job_ids, linked_session_ids, markers,
           created_at, updated_at, approved_at, completed_at
         ) VALUES (
-          @id, @owner_id, @title, @goal, @workspace, @status, @plan, @findings, @summary,
+          @id, @owner_id, @title, @goal, @workspace, @status, @plan, @plan_revision,
+          @approved_revision, @findings, @handoff, @summary,
           @linked_job_ids, @linked_session_ids, @markers,
           @created_at, @updated_at, @approved_at, @completed_at
         )`,
@@ -189,6 +250,7 @@ export class MissionStore {
         linked_job_ids: JSON.stringify(rec.linked_job_ids),
         linked_session_ids: JSON.stringify(rec.linked_session_ids),
         markers: JSON.stringify(rec.markers),
+        handoff: null,
       });
     this.onEvent?.({
       source: "missions",
@@ -246,6 +308,7 @@ export class MissionStore {
       workspace?: string | null;
       status?: MissionStatus;
       plan?: string | null;
+      handoff?: MissionHandoff | null;
       findings?: string | null;
       summary?: string | null;
       markers?: MissionRecord["markers"];
@@ -268,20 +331,35 @@ export class MissionStore {
         throw new Error(`invalid status: ${patch.status}`);
       }
       cur.status = patch.status;
-      if (patch.status === "approved" && !cur.approved_at) {
-        cur.approved_at = nowIso();
+      if (patch.status === "approved") {
+        if (!cur.approved_at) cur.approved_at = nowIso();
+        cur.approved_revision = cur.plan_revision;
       }
       if (patch.status === "done" && !cur.completed_at) {
         cur.completed_at = nowIso();
       }
     }
     if (patch.plan !== undefined) {
-      cur.plan = patch.plan === null ? null : patch.plan.slice(0, 50_000);
+      const nextPlan = patch.plan === null ? null : patch.plan.slice(0, 50_000);
+      if (nextPlan !== cur.plan) {
+        cur.plan = nextPlan;
+        cur.plan_revision += 1;
+        cur.approved_revision = null;
+        cur.approved_at = null;
+        if (
+          cur.status === "approved" ||
+          cur.status === "implementing" ||
+          cur.status === "verifying"
+        ) {
+          cur.status = "plan_ready";
+        }
+      }
     }
     if (patch.findings !== undefined) {
       cur.findings =
         patch.findings === null ? null : patch.findings.slice(0, 50_000);
     }
+    if (patch.handoff !== undefined) cur.handoff = patch.handoff;
     if (patch.summary !== undefined) {
       cur.summary =
         patch.summary === null ? null : patch.summary.slice(0, 20_000);
@@ -307,7 +385,9 @@ export class MissionStore {
       .prepare(
         `UPDATE missions SET
           title=@title, goal=@goal, workspace=@workspace, status=@status,
-          plan=@plan, findings=@findings, summary=@summary,
+          plan=@plan, plan_revision=@plan_revision,
+          approved_revision=@approved_revision, findings=@findings,
+          handoff=@handoff, summary=@summary,
           linked_job_ids=@linked_job_ids, linked_session_ids=@linked_session_ids,
           markers=@markers, updated_at=@updated_at,
           approved_at=@approved_at, completed_at=@completed_at
@@ -318,6 +398,7 @@ export class MissionStore {
         linked_job_ids: JSON.stringify(cur.linked_job_ids),
         linked_session_ids: JSON.stringify(cur.linked_session_ids),
         markers: JSON.stringify(cur.markers),
+        handoff: cur.handoff === null ? null : JSON.stringify(cur.handoff),
       });
     if (cur.status !== prevStatus) {
       this.onEvent?.({

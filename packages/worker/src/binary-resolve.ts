@@ -13,6 +13,7 @@ const DEFAULT_SEARCH_DIRS = [
   join(homedir(), ".local", "bin"),
   join(homedir(), ".kimi-code", "bin"),
   join(homedir(), ".cursor", "bin"),
+  join(homedir(), ".npm-global", "bin"),
   "/opt/homebrew/bin",
   "/usr/local/bin",
   "/usr/bin",
@@ -82,7 +83,7 @@ export type ModelSupport = {
 
 /** Detect model CLI flags from help text; never invent unsupported flags. */
 export function detectModelSupport(
-  kind: "cursor" | "kimi" | "shell",
+  kind: "cursor" | "kimi" | "codex" | "shell",
   helpText: string,
 ): ModelSupport {
   if (kind === "shell") {
@@ -104,6 +105,14 @@ export function detectModelSupport(
       listCommand: hasListModels ? ["--list-models"] : null,
       knownModels: null,
       notes: "per-session --model; does not change global defaults",
+    };
+  }
+  if (kind === "codex" && hasLongModel) {
+    return {
+      flag: "--model",
+      listCommand: null,
+      knownModels: null,
+      notes: "per-session --model; does not change Codex config defaults",
     };
   }
   if (kind === "kimi" && (hasLongModel || hasShortM)) {

@@ -1,13 +1,13 @@
 # Interactive terminal sessions
 
-Owner-authenticated MCP tools drive real PTYs on the Mac worker. Sessions outlive ChatGPT turns while the **worker process** is alive. They are **not** persisted across worker restart (PTYs die with the process). Managed `start_task` jobs remain in SQLite and are unchanged.
+Owner-authenticated MCP tools drive real shell, Cursor, Kimi, or Codex PTYs on the Mac worker. Sessions outlive ChatGPT turns while the **worker process** is alive. They are **not** persisted across worker restart (PTYs die with the process). Managed `start_task` jobs remain in SQLite and are unchanged.
 
 ## Tools
 
 | Tool | Purpose |
 | --- | --- |
 | `terminal_capabilities` | Binaries, model flags, control keys, restart honesty |
-| `create_terminal_session` | `kind=shell\|cursor\|kimi`, `workspace`, optional `model`/`cols`/`rows`/`idle_sec` |
+| `create_terminal_session` | `kind=shell\|cursor\|kimi\|codex`, `workspace`, optional `model`/`cols`/`rows`/`idle_sec` |
 | `list_terminal_sessions` | Your sessions only |
 | `get_terminal_session` | Status (`waiting`/`running`/`exited`/`error`) |
 | `read_terminal_output` | Bounded incremental read with absolute byte `offset` |
@@ -22,6 +22,7 @@ Workspace sets **initial cwd** under `allowed_roots`. It is **not** an OS sandbo
 
 - Cursor: `--model` only if CLI help exposes it.
 - Kimi: `-m` / `--model` only if help exposes it. No `--effort` flag.
+- Codex: `--model` only if CLI help exposes it.
 - Requested model is applied as a CLI flag; **effective** model is not independently verified.
 
 ## Setup / activation
@@ -35,6 +36,8 @@ agents:
     binary: /Users/YOU/.local/bin/agent
   kimi:
     binary: /Users/YOU/.kimi-code/bin/kimi
+  codex:
+    binary: /usr/local/bin/codex
 worker:
   terminal_sessions:
     default_idle_sec: 3600
@@ -53,9 +56,9 @@ Then refresh the ChatGPT / MCP client tool list (reconnect the connector) so new
 
 ## Thread / chat memory
 
-- **ChatGPT chat history is not auto-sent to Cursor/Kimi.** When opening or continuing a PTY, include the relevant goals/constraints in `write_terminal_input` (or in a `start_task` prompt).
+- **ChatGPT chat history is not auto-sent to Cursor/Kimi/Codex.** When opening or continuing a PTY, include the relevant goals/constraints in `write_terminal_input` (or in a `start_task` prompt).
 - **Mac-side continuity** = the live PTY + `read_terminal_output` offsets (and the agent CLI’s own REPL memory). Prefer one long-lived `create_terminal_session` per task thread.
-- **`start_task`** is fire-and-forget (`agent -p` / `kimi -p`); use `send_followup` for queued direction — weaker than a live session.
+- **`start_task`** is fire-and-forget (`agent -p`, `kimi -p`, or `codex exec`); use `send_followup` for queued direction — weaker than a live session.
 
 ## Rollback
 

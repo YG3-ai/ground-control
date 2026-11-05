@@ -44,3 +44,7 @@ launchctl kickstart -k "gui/$(id -u)/com.groundcontrol.worker"
 ```
 
 If you still hit Kimi’s wall: lower `max_starts_per_window`, raise `min_gap_sec`, keep effort low, batch emails instead of one-shot chats.
+
+## Codex
+
+Codex uses the same managed-job path with its own pacing policy. Research and triage run through `codex exec --json` in the read-only sandbox; implementation uses `workspace-write`. Follow-ups resume the recorded Codex thread when the CLI reports a thread id.

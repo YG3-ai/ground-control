@@ -3,11 +3,13 @@ import type { AgentAdapter } from "./types.js";
 import { MockAdapter } from "./mock.js";
 import { CursorAdapter } from "./cursor.js";
 import { KimiAdapter } from "./kimi.js";
+import { CodexAdapter } from "./codex.js";
 
 const adapters: Record<AgentKind, AgentAdapter> = {
   mock: new MockAdapter(),
   cursor: new CursorAdapter(),
   kimi: new KimiAdapter(),
+  codex: new CodexAdapter(),
 };
 
 export function getAdapter(kind: AgentKind): AgentAdapter {

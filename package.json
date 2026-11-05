@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "license": "PolyForm-Shield-1.0.0",
-  "description": "Personal agent control: ChatGPT coordinates Cursor/Kimi on your Mac via owned MCP relay",
+  "description": "Personal agent control: ChatGPT coordinates Cursor, Kimi, and Codex on your Mac via owned MCP relay",
   "workspaces": [
     "packages/*"
   ],

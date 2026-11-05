@@ -55,11 +55,13 @@ import { startLocalControlServer } from "./local/control-server.js";
 import {
   MissionStore,
   MISSION_STATUSES,
+  type MissionRecord,
   type MissionStatus,
 } from "./missions/store.js";
 import { buildBoardSystemFocus } from "./board-system-focus.js";
 import {
   UsageLedger,
+  DEFAULT_CODEX_POLICY,
   DEFAULT_CURSOR_POLICY,
   DEFAULT_KIMI_POLICY,
   looksLikeRateLimit,
@@ -190,6 +192,10 @@ export class WorkerService {
     return join(this.dataDir, "jobs");
   }
 
+  private get advisorEnabled(): boolean {
+    return this.config.advisor?.enabled ?? this.config.supervisor.enabled;
+  }
+
   start(): void {
     const recovered = this.store.recoverAfterRestart();
     if (recovered > 0) {
@@ -286,7 +292,11 @@ export class WorkerService {
   private usagePolicy(agent: UsageAgent): AgentUsagePolicy {
     const u = this.config.agents[agent]?.usage;
     const base =
-      agent === "kimi" ? DEFAULT_KIMI_POLICY : DEFAULT_CURSOR_POLICY;
+      agent === "kimi"
+        ? DEFAULT_KIMI_POLICY
+        : agent === "codex"
+          ? DEFAULT_CODEX_POLICY
+          : DEFAULT_CURSOR_POLICY;
     return {
       window_sec: u?.window_sec ?? base.window_sec,
       max_starts_per_window:
@@ -549,11 +559,23 @@ export class WorkerService {
             j.status === "running" ||
             j.status === "awaiting_followup"),
       ).length;
+    const codexInFlight = this.store
+      .listRecent(ownerId, 50)
+      .filter(
+        (j) =>
+          j.agent === "codex" &&
+          (j.status === "queued" ||
+            j.status === "preparing" ||
+            j.status === "running" ||
+            j.status === "awaiting_followup"),
+      ).length;
     const cursor = this.usage.snapshot("cursor", this.usagePolicy("cursor"));
     const kimi = this.usage.snapshot("kimi", this.usagePolicy("kimi"));
+    const codex = this.usage.snapshot("codex", this.usagePolicy("codex"));
     return {
       at: new Date().toISOString(),
       cursor: { ...cursor, in_flight: cursorInFlight },
+      codex: { ...codex, in_flight: codexInFlight },
       kimi: {
         ...kimi,
         in_flight: kimiInFlight,
@@ -734,6 +756,9 @@ export class WorkerService {
     if (input.kind === "kimi" && !isAgentEnabled(this.config, "kimi")) {
       throw new AuthError("agent not enabled: kimi");
     }
+    if (input.kind === "codex" && !isAgentEnabled(this.config, "codex")) {
+      throw new AuthError("agent not enabled: codex");
+    }
     let workPath: string;
     try {
       workPath = resolveWorkspacePath(
@@ -757,6 +782,7 @@ export class WorkerService {
         idleSec: input.idleSec,
         agentBinary: this.config.agents.cursor?.binary,
         kimiBinary: this.config.agents.kimi?.binary,
+        codexBinary: this.config.agents.codex?.binary,
         maxOutputBytes: this.config.worker.max_output_bytes,
       });
     } catch (err) {
@@ -810,6 +836,7 @@ export class WorkerService {
     return this.sessions.capabilities(ownerId, {
       cursorBinary: this.config.agents.cursor?.binary,
       kimiBinary: this.config.agents.kimi?.binary,
+      codexBinary: this.config.agents.codex?.binary,
     });
   }
 
@@ -874,7 +901,7 @@ export class WorkerService {
         menu_bar_url: `http://${lc?.bind ?? "127.0.0.1"}:${lc?.port ?? 8788}`,
       },
       note:
-        "Orchestration (hybrid_remote): create_mission → research/terminal within scope → plan in chat → approve_mission authorization=chat_explicit after owner consent (or require_dialog for Mac) → implement without re-approving → complete_mission + notify. Sensitive actions: request_local_approval only. Whiteboard: local_control.whiteboard_url. Re-call get_situation to refresh.",
+        "Orchestration (hybrid_remote): create_mission → research within scope → submit_mission_plan → approve_mission authorization=chat_explicit after owner consent (or require_dialog for Mac) → start_task with mission_id → verify → complete_mission + notify. Any MCP-capable chat coordinator can continue from the durable mission packet. Sensitive actions: request_local_approval only. Re-call get_situation to refresh.",
       redaction_note: REDACTION_DISCLAIMER,
     };
   }
@@ -922,6 +949,7 @@ export class WorkerService {
         ).length,
         kimi_starts_left: usage.kimi.starts_remaining,
         cursor_starts_left: usage.cursor.starts_remaining,
+        codex_starts_left: usage.codex.starts_remaining,
         queued_bugfixes: usage.queued_bugfixes,
       },
     };
@@ -971,6 +999,19 @@ export class WorkerService {
   ) {
     this.assertOwner(ownerId);
     const cur = this.getMission(ownerId, id);
+    if (patch.status === "approved") {
+      throw new AuthError(
+        "use approve_mission to record explicit approval for the current plan revision",
+      );
+    }
+    if (
+      (patch.status === "implementing" || patch.status === "verifying") &&
+      !missionRoutineScopeApproved(cur)
+    ) {
+      throw new AuthError(
+        `mission plan revision ${cur.plan_revision} must be approved before implementation`,
+      );
+    }
     if (isMissionWorkspaceScopeExpansion(cur, patch.workspace)) {
       throw new AuthError(
         "hybrid_remote: workspace scope expansion requires Mac confirmation — explain in ChatGPT, call request_local_approval (permission), and pause until approved",
@@ -1051,6 +1092,29 @@ export class WorkerService {
       approval_policy: "hybrid_remote",
       approved_scope: scope,
     };
+  }
+
+  async submitMissionPlan(
+    ownerId: string,
+    id: string,
+    input: { plan: string; findings?: string; notify?: boolean },
+  ) {
+    this.assertOwner(ownerId);
+    if (!input.plan.trim()) throw new AuthError("mission plan cannot be empty");
+    const updated = this.missions.update(ownerId, id, {
+      plan: input.plan,
+      findings: input.findings,
+      status: "plan_ready",
+      markers: { plan_approved: false, decision: "plan_review" },
+    });
+    if (input.notify !== false) {
+      await this.approvals.notifyOwner(
+        ownerId,
+        `Plan ready · ${updated.title}`,
+        `Revision ${updated.plan_revision} is ready. All good?`,
+      );
+    }
+    return updated;
   }
 
   async completeMission(
@@ -1158,7 +1222,7 @@ export class WorkerService {
 
   /**
    * Discovery for ChatGPT: workspaces under allowed_roots + optional named aliases.
-   * Paths are returned so you can direct Cursor/Kimi — they already have git access there.
+   * Paths are returned so you can direct local coding agents to real workspaces.
    */
   listProjects(ownerId: string) {
     this.assertOwner(ownerId);
@@ -1179,7 +1243,7 @@ export class WorkerService {
       name: h.name,
       kind: "workspace" as const,
       description: `Under ${h.root}`,
-      allowed_agents: (["cursor", "kimi"] as AgentKind[]).filter((a) =>
+      allowed_agents: (["cursor", "kimi", "codex"] as AgentKind[]).filter((a) =>
         isAgentEnabled(this.config, a),
       ),
       workspace: h.name,
@@ -1195,7 +1259,7 @@ export class WorkerService {
       aliases,
       clients: this.clientDefs(),
       note:
-        "Pass workspace (folder name or path under allowed_roots) with agent cursor|kimi. Client bugfixes: ingest_client_request → run_next_bugfix (Kimi, paced for 5h window). Research: start_task tier=research (Cursor ask mode + cheap model).",
+        "Pass workspace (folder name or path under allowed_roots) with agent cursor|kimi|codex. Client bugfixes: ingest_client_request → run_next_bugfix (Kimi, paced for 5h window). Research tiers use read-only modes where supported.",
       terminal_sessions:
         "Interactive PTYs outlive chat turns while the worker process is up; worker restart ends them. Workspace sets cwd only — not an OS sandbox.",
     };
@@ -1206,6 +1270,28 @@ export class WorkerService {
     return this.store.listRecent(ownerId, limit).map((j) => this.toView(j));
   }
 
+  private missionContextPacket(mission: MissionRecord): string {
+    const handoff = mission.handoff
+      ? `${mission.handoff.agent} job ${mission.handoff.job_id} ended ${mission.handoff.status}: ${mission.handoff.summary ?? "no summary"}`
+      : "none";
+    return [
+      "[Ground Control mission packet]",
+      `Mission: ${mission.id}`,
+      `Goal: ${mission.goal}`,
+      `Workspace: ${mission.workspace ?? "unspecified"}`,
+      `Plan revision: ${mission.plan_revision}`,
+      `Approved revision: ${mission.approved_revision ?? "none"}`,
+      `Approved scope: ${String(mission.markers.approved_scope ?? "none")}`,
+      "Approved plan:",
+      mission.plan ?? "none",
+      "Relevant findings:",
+      mission.findings ?? "none",
+      `Previous handoff: ${handoff}`,
+      "Stay within the approved plan and scope. Record blockers instead of broadening scope.",
+      "[End mission packet]",
+    ].join("\n");
+  }
+
   startTask(input: StartTaskInput): TaskView {
     this.assertOwner(input.ownerId);
 
@@ -1214,10 +1300,31 @@ export class WorkerService {
     }
 
     const tier = (input.tier ?? "default") as string;
+    const mutatingTier = tier !== "research" && tier !== "triage";
+    let mission: MissionRecord | null = null;
+    if (input.missionId) {
+      mission = this.getMission(input.ownerId, input.missionId);
+    }
+    if (this.advisorEnabled && mutatingTier) {
+      if (!mission) {
+        throw new AuthError(
+          "Advisor: implementation requires mission_id with an approved plan",
+        );
+      }
+      if (!missionRoutineScopeApproved(mission)) {
+        throw new AuthError(
+          `Advisor: mission plan revision ${mission.plan_revision} is not approved`,
+        );
+      }
+    }
     let resolvedModel: string | null = input.model ?? null;
     let cursorMode: "ask" | "plan" | null = null;
 
-    if (input.agent === "cursor" || input.agent === "kimi") {
+    if (
+      input.agent === "cursor" ||
+      input.agent === "kimi" ||
+      input.agent === "codex"
+    ) {
       const policy = this.usagePolicy(input.agent);
       resolvedModel = resolveModelForTier(policy, tier, input.model);
       if (
@@ -1227,37 +1334,37 @@ export class WorkerService {
       ) {
         cursorMode = policy.research_mode;
       }
-      const inFlight = [...this.active.values()].length; // rough; refined below
-      const agentInFlight = this.store
-        .listRecent(input.ownerId, 40)
-        .filter(
-          (j) =>
-            j.agent === input.agent &&
-            (j.status === "queued" ||
-              j.status === "preparing" ||
-              j.status === "running" ||
-              j.status === "awaiting_followup"),
-        ).length;
-      void inFlight;
-      const budget = this.usage.checkBudget(
-        input.agent,
-        policy,
-        agentInFlight,
-      );
-      if (!budget.allowed) {
-        this.usage.record({
-          agent: input.agent,
-          kind: "blocked",
-          tier,
-          model: resolvedModel,
-          detail: budget.reason,
-        });
-        throw new AuthError(
-          `usage budget: ${budget.reason}` +
-            (budget.retry_after_sec
-              ? ` (retry_after_sec=${budget.retry_after_sec})`
-              : ""),
+      if (!this.advisorEnabled) {
+        const agentInFlight = this.store
+          .listRecent(input.ownerId, 40)
+          .filter(
+            (j) =>
+              j.agent === input.agent &&
+              (j.status === "queued" ||
+                j.status === "preparing" ||
+                j.status === "running" ||
+                j.status === "awaiting_followup"),
+          ).length;
+        const budget = this.usage.checkBudget(
+          input.agent,
+          policy,
+          agentInFlight,
         );
+        if (!budget.allowed) {
+          this.usage.record({
+            agent: input.agent,
+            kind: "blocked",
+            tier,
+            model: resolvedModel,
+            detail: budget.reason,
+          });
+          throw new AuthError(
+            `usage budget: ${budget.reason}` +
+              (budget.retry_after_sec
+                ? ` (retry_after_sec=${budget.retry_after_sec})`
+                : ""),
+          );
+        }
       }
     }
 
@@ -1276,9 +1383,9 @@ export class WorkerService {
       projectId = project.id;
       timeoutSec = Math.min(timeoutSec, project.permissions.max_runtime_sec);
     } else {
-      // cursor / kimi host mode — workspace required, no project registry
+      // Host coding-agent mode — workspace required, no project registry.
       if (!input.workspace) {
-        throw new AuthError("workspace is required for cursor/kimi");
+        throw new AuthError("workspace is required for cursor/kimi/codex");
       }
       try {
         workPath = resolveWorkspacePath(
@@ -1292,6 +1399,19 @@ export class WorkerService {
         );
       }
       projectId = workspaceLabel(workPath);
+
+      if (mission?.workspace) {
+        const missionPath = resolveWorkspacePath(
+          mission.workspace,
+          this.config.worker.allowed_roots,
+          this.configRoot,
+        );
+        if (missionPath !== workPath) {
+          throw new AuthError(
+            "Advisor: task workspace does not match the approved mission workspace",
+          );
+        }
+      }
 
       // Serialize concurrent host jobs on the same live workspace
       const active = this.store
@@ -1313,7 +1433,11 @@ export class WorkerService {
             j.status === "preparing" ||
             j.status === "queued",
         );
-        if (blockers.length > 0 && !input.idempotencyKey) {
+        if (
+          blockers.length > 0 &&
+          !input.idempotencyKey &&
+          !(this.advisorEnabled && mission)
+        ) {
           throw new AuthError(
             `workspace busy with job ${blockers[0]!.id} (${blockers[0]!.status}); check in with get_task or send_followup`,
           );
@@ -1321,25 +1445,40 @@ export class WorkerService {
       }
     }
 
+    const prompt = mission
+      ? `${this.missionContextPacket(mission)}\n\nTask request:\n${input.prompt}`
+      : input.prompt;
     const job = this.store.createJob({
       ...input,
+      prompt,
       projectId,
       workPath,
       timeoutSec,
+      resolvedModel,
+      cursorMode,
     });
-    if (input.agent === "cursor" || input.agent === "kimi") {
+    if (
+      input.agent === "cursor" ||
+      input.agent === "kimi" ||
+      input.agent === "codex"
+    ) {
       this.jobMeta.set(job.id, {
         tier,
         model: resolvedModel,
         cursorMode,
       });
-      this.usage.record({
-        agent: input.agent,
-        kind: "start",
-        jobId: job.id,
-        tier,
-        model: resolvedModel,
-      });
+      if (!this.advisorEnabled) {
+        this.usage.record({
+          agent: input.agent,
+          kind: "start",
+          jobId: job.id,
+          tier,
+          model: resolvedModel,
+        });
+      }
+    }
+    if (mission) {
+      this.missions.update(input.ownerId, mission.id, { linkJobId: job.id });
     }
     if (this.running) void this.tick();
     return this.toView(job);
@@ -1436,6 +1575,8 @@ export class WorkerService {
       owner_id: job.owner_id,
       project_id: job.project_id,
       agent: job.agent,
+      mission_id: job.mission_id,
+      tier: job.tier,
       status: job.status,
       summary: job.summary,
       error: job.error,
@@ -1472,6 +1613,71 @@ export class WorkerService {
     const job = this.store.getJob(jobId);
     if (!job || job.status !== "queued") return;
 
+    if (this.advisorEnabled) {
+      if (
+        job.work_path &&
+        this.store
+          .listActiveForWorkPath(job.work_path)
+          .some(
+            (candidate) =>
+              candidate.id !== job.id && candidate.status !== "queued",
+          )
+      ) {
+        return;
+      }
+      let mission: MissionRecord | null = null;
+      if (job.mission_id) {
+        mission = this.missions.get(job.owner_id, job.mission_id);
+        const researchTier = job.tier === "research" || job.tier === "triage";
+        if (!mission || (!researchTier && !missionRoutineScopeApproved(mission))) {
+          return;
+        }
+      }
+      if (
+        job.agent === "cursor" ||
+        job.agent === "kimi" ||
+        job.agent === "codex"
+      ) {
+        const inFlight = this.store
+          .listRecent(job.owner_id, 100)
+          .filter(
+            (candidate) =>
+              candidate.id !== job.id &&
+              candidate.agent === job.agent &&
+              (candidate.status === "preparing" ||
+                candidate.status === "running" ||
+                candidate.status === "awaiting_followup"),
+          ).length;
+        const budget = this.usage.checkBudget(
+          job.agent,
+          this.usagePolicy(job.agent),
+          inFlight,
+        );
+        if (!budget.allowed) return;
+        this.usage.record({
+          agent: job.agent,
+          kind: "start",
+          jobId: job.id,
+          tier: job.tier,
+          model: job.model,
+        });
+      }
+      if (mission) {
+        if (
+          (job.tier === "research" || job.tier === "triage") &&
+          mission.status === "intake"
+        ) {
+          this.missions.update(job.owner_id, mission.id, {
+            status: "researching",
+          });
+        } else if (mission.status === "approved") {
+          this.missions.update(job.owner_id, mission.id, {
+            status: "implementing",
+          });
+        }
+      }
+    }
+
     this.store.updateJob(jobId, {
       status: "preparing",
       started_at: job.started_at ?? new Date().toISOString(),
@@ -1484,7 +1690,9 @@ export class WorkerService {
       let sourcePath = workPath ?? "";
 
       const useHost =
-        (job.agent === "cursor" || job.agent === "kimi") &&
+        (job.agent === "cursor" ||
+          job.agent === "kimi" ||
+          job.agent === "codex") &&
         this.config.worker.agent_execution === "host";
 
       if (useHost) {
@@ -1518,11 +1726,16 @@ export class WorkerService {
       const adapter = getAdapter(job.agent as AgentKind);
       const project = getProject(this.config, job.project_id);
       let binary = agentCfg?.binary;
-      if (useHost && (job.agent === "cursor" || job.agent === "kimi")) {
+      if (
+        useHost &&
+        (job.agent === "cursor" ||
+          job.agent === "kimi" ||
+          job.agent === "codex")
+      ) {
         try {
           binary = resolveExecutable(
             agentCfg?.binary,
-            job.agent === "cursor" ? "agent" : "kimi",
+            job.agent === "cursor" ? "agent" : job.agent,
           ).path;
         } catch (err) {
           throw new Error(
@@ -1545,9 +1758,9 @@ export class WorkerService {
         cpus: this.config.worker.isolation.cpus,
         timeoutSec: job.timeout_sec,
         binary,
-        model: meta?.model,
-        tier: meta?.tier,
-        cursorMode: meta?.cursorMode,
+        model: job.model ?? meta?.model,
+        tier: job.tier ?? meta?.tier,
+        cursorMode: job.cursor_mode ?? meta?.cursorMode,
       });
 
       const onOutput = (chunk: { stdout?: string; stderr?: string }) => {
@@ -1586,12 +1799,33 @@ export class WorkerService {
         this.finishJob(jobId, plan, result, mode, sourcePath);
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       this.store.updateJob(jobId, {
         status: "failed",
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
         finished_at: new Date().toISOString(),
       });
       this.active.delete(jobId);
+      if (job.mission_id) {
+        const mission = this.missions.get(job.owner_id, job.mission_id);
+        if (mission) {
+          this.missions.update(job.owner_id, mission.id, {
+            status: "blocked",
+            handoff: {
+              job_id: job.id,
+              agent: job.agent,
+              status: "failed",
+              summary: message,
+              recorded_at: new Date().toISOString(),
+            },
+          });
+          void this.approvals.notifyOwner(
+            job.owner_id,
+            `Mission blocked · ${mission.title}`,
+            `${job.agent} could not start. Review the handoff before retrying or switching agents.`,
+          );
+        }
+      }
     }
   }
 
@@ -1643,7 +1877,9 @@ export class WorkerService {
 
     const combinedOut = `${result.stdout}\n${result.stderr}`;
     if (
-      (job.agent === "cursor" || job.agent === "kimi") &&
+      (job.agent === "cursor" ||
+        job.agent === "kimi" ||
+        job.agent === "codex") &&
       looksLikeRateLimit(combinedOut)
     ) {
       status = "failed";
@@ -1652,17 +1888,21 @@ export class WorkerService {
         agent: job.agent,
         kind: "rate_limited",
         jobId,
-        tier: this.jobMeta.get(jobId)?.tier,
-        model: this.jobMeta.get(jobId)?.model,
+        tier: job.tier,
+        model: job.model,
         detail: combinedOut.slice(-500),
       });
-    } else if (job.agent === "cursor" || job.agent === "kimi") {
+    } else if (
+      job.agent === "cursor" ||
+      job.agent === "kimi" ||
+      job.agent === "codex"
+    ) {
       this.usage.record({
         agent: job.agent,
         kind: "finish",
         jobId,
-        tier: this.jobMeta.get(jobId)?.tier,
-        model: this.jobMeta.get(jobId)?.model,
+        tier: job.tier,
+        model: job.model,
         detail: status,
       });
     }
@@ -1679,6 +1919,33 @@ export class WorkerService {
 
     this.active.delete(jobId);
     this.jobMeta.delete(jobId);
+
+    if (job.mission_id) {
+      try {
+        const mission = this.missions.get(job.owner_id, job.mission_id);
+        if (mission) {
+          this.missions.update(job.owner_id, mission.id, {
+            status: status === "succeeded" ? "verifying" : "blocked",
+            handoff: {
+              job_id: job.id,
+              agent: job.agent,
+              status,
+              summary,
+              recorded_at: new Date().toISOString(),
+            },
+          });
+          if (status !== "succeeded") {
+            void this.approvals.notifyOwner(
+              job.owner_id,
+              `Mission blocked · ${mission.title}`,
+              `${job.agent} ended ${status}. Review the handoff before retrying or switching agents.`,
+            );
+          }
+        }
+      } catch {
+        // Mission handoff is best-effort; job state remains authoritative.
+      }
+    }
 
     // Auto-complete client bugfix requests linked to this job
     if (job.agent === "kimi" && (status === "succeeded" || status === "failed")) {
@@ -1734,6 +2001,7 @@ export class WorkerService {
         // best-effort
       }
     }
+    void this.tick();
   }
 }
 

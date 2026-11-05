@@ -49,4 +49,33 @@ describe("MissionStore", () => {
     expect(done.markers.board).toBe("green");
     store.close();
   });
+
+  it("increments plan revisions and invalidates stale approval", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ac-mission-revision-"));
+    roots.push(dir);
+    const store = new MissionStore(join(dir, "missions.db"));
+    const mission = store.create({
+      ownerId: "owner-local",
+      title: "Ship safely",
+      goal: "Use an approved plan",
+    });
+    const planned = store.update("owner-local", mission.id, {
+      status: "plan_ready",
+      plan: "1. Inspect\n2. Implement\n3. Verify",
+    });
+    expect(planned.plan_revision).toBe(1);
+    const approved = store.update("owner-local", mission.id, {
+      status: "approved",
+    });
+    expect(approved.approved_revision).toBe(1);
+
+    const revised = store.update("owner-local", mission.id, {
+      plan: "1. Inspect\n2. Implement narrowly\n3. Verify",
+    });
+    expect(revised.plan_revision).toBe(2);
+    expect(revised.approved_revision).toBeNull();
+    expect(revised.approved_at).toBeNull();
+    expect(revised.status).toBe("plan_ready");
+    store.close();
+  });
 });

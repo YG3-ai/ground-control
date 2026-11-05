@@ -52,6 +52,7 @@ export function buildTestConfig(root: string, fixturePath: string): AppConfig {
       mock: { enabled: true, adapter: "mock" },
       cursor: { enabled: false, adapter: "cursor" },
       kimi: { enabled: false, adapter: "kimi" },
+      codex: { enabled: false, adapter: "codex" },
     },
     projects: [
       {

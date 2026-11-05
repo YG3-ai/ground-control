@@ -2,7 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { WorkerHub } from "../worker-hub.js";
 
-const AgentSchema = z.enum(["mock", "cursor", "kimi"]);
+const AgentSchema = z.enum(["mock", "cursor", "kimi", "codex"]);
 
 function textResult(data: unknown) {
   return {
@@ -21,7 +21,7 @@ export function registerTools(
 ): void {
   server.tool(
     "list_projects",
-    "Discover workspaces under allowed_roots and list enabled agents (cursor/kimi). Use workspace names when starting tasks. No per-repo registration needed.",
+    "Discover workspaces under allowed_roots and list enabled agents (cursor/kimi/codex). Use workspace names when starting tasks. No per-repo registration needed.",
     {},
     async (_args, extra) => {
       const ownerId = ownerFromAuth(extra, defaultOwnerId);
@@ -49,17 +49,24 @@ export function registerTools(
 
   server.tool(
     "start_task",
-    "Fire-and-forget managed job (one-shot CLI -p), NOT an interactive terminal. Prefer create_terminal_session for multi-turn / REPL / 'drive it like I would' work. Include any needed chat-thread context in prompt — Cursor/Kimi do not see this ChatGPT conversation automatically. Returns job id immediately; work continues on the Mac after this turn. For mock/demo only, pass project_id instead.",
+    "Fire-and-forget managed job (one-shot local agent CLI), NOT an interactive terminal. Prefer create_terminal_session for multi-turn / REPL / 'drive it like I would' work. Include any needed chat-thread context in prompt — Cursor, Kimi, and Codex do not see this ChatGPT conversation automatically. Returns job id immediately; work continues on the Mac after this turn. For mock/demo only, pass project_id instead.",
     {
-      agent: AgentSchema.describe("cursor or kimi for real local agents; mock for isolation demo"),
+      agent: AgentSchema.describe("cursor, kimi, or codex for real local agents; mock for isolation demo"),
       prompt: z.string().min(1).max(20_000).describe("Instructions for the agent"),
+      mission_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe(
+          "Mission supplying the approved plan, durable context, workspace lock, and handoff history. Required for implementation when Advisor is enabled.",
+        ),
       workspace: z
         .string()
         .min(1)
         .max(500)
         .optional()
         .describe(
-          "Workspace folder name (e.g. ycrm or Winning/ycrm) or path under allowed_roots. Required for cursor/kimi.",
+          "Workspace folder name (e.g. ycrm or Winning/ycrm) or path under allowed_roots. Required for cursor/kimi/codex.",
         ),
       project_id: z
         .string()
@@ -88,6 +95,7 @@ export function registerTools(
           workspace: args.workspace,
           agent: args.agent,
           prompt: args.prompt,
+          missionId: args.mission_id,
           idempotencyKey: args.idempotency_key,
           timeoutSec: args.timeout_sec,
           tier: args.tier,
@@ -158,7 +166,7 @@ export function registerTools(
 
   server.tool(
     "terminal_capabilities",
-    "Report installed shell/cursor/kimi binaries, verified model flags, supported control keys, and restart behavior for interactive sessions.",
+    "Report installed shell/cursor/kimi/codex binaries, verified model flags, supported control keys, and restart behavior for interactive sessions.",
     {},
     async (_args, extra) => {
       const ownerId = ownerFromAuth(extra, defaultOwnerId);
@@ -169,11 +177,11 @@ export function registerTools(
 
   server.tool(
     "create_terminal_session",
-    "PRIMARY tool for interactive control: start a persistent PTY on the Mac (shell, cursor, or kimi) like a real terminal. Survives chat turns while the worker is up; dies on worker restart. Then write_terminal_input / read_terminal_output in a loop. Paste relevant ChatGPT-thread context into the first write so the local agent shares goals. workspace sets initial cwd under allowed_roots (not an OS sandbox). Does not attach to unrelated personal terminals.",
+    "PRIMARY tool for interactive control: start a persistent PTY on the Mac (shell, cursor, kimi, or codex) like a real terminal. Survives chat turns while the worker is up; dies on worker restart. Then write_terminal_input / read_terminal_output in a loop. Paste relevant ChatGPT-thread context into the first write so the local agent shares goals. workspace sets initial cwd under allowed_roots (not an OS sandbox). Does not attach to unrelated personal terminals.",
     {
       kind: z
-        .enum(["shell", "cursor", "kimi"])
-        .describe("shell for ordinary commands; cursor/kimi for interactive agent CLIs"),
+        .enum(["shell", "cursor", "kimi", "codex"])
+        .describe("shell for ordinary commands; cursor/kimi/codex for interactive agent CLIs"),
       workspace: z
         .string()
         .min(1)
@@ -608,6 +616,31 @@ export function registerTools(
           markers: args.markers,
           linkJobId: args.link_job_id,
           linkSessionId: args.link_session_id,
+        },
+        ownerId,
+      );
+      return textResult(result);
+    },
+  );
+
+  server.tool(
+    "submit_mission_plan",
+    "Submit or revise a mission plan for human review. Increments the plan revision, invalidates any older approval, moves the mission to plan_ready, and sends the owner an 'All good?' notification.",
+    {
+      mission_id: z.string().uuid(),
+      plan: z.string().min(1).max(50_000),
+      findings: z.string().max(50_000).optional(),
+      notify: z.boolean().optional(),
+    },
+    async (args, extra) => {
+      const ownerId = ownerFromAuth(extra, defaultOwnerId);
+      const result = await hub.request(
+        "submit_mission_plan",
+        {
+          missionId: args.mission_id,
+          plan: args.plan,
+          findings: args.findings,
+          notify: args.notify,
         },
         ownerId,
       );
