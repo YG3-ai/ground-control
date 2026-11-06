@@ -17,3 +17,5 @@ Verified locally on 2026-11-05:
 The broader npm test run was bounded to 120 seconds. Its worker/shared suites passed; the unchanged World UI video-request case timed out, and the relay runner did not finish within that bound. This is not represented as a fully green broad UI suite.
 
 Private machine configuration, environment files, data and historical internal repository objects must not be published. Runtime rollout and GitHub publication are verified separately from this candidate evidence.
+
+Fresh-clone CI exposed a missing shared-package emit before downstream typechecking. Restored the shared typecheck emit used by the public baseline and declared the relay icon builder Python/Pillow dependency explicitly in CI and setup documentation.
