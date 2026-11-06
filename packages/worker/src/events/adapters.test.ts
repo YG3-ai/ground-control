@@ -233,7 +233,9 @@ describe("session lifecycle hooks", () => {
     await new Promise((r) => setTimeout(r, 400));
     service.closeTerminalSession("owner-test", rec.id);
     // exited event fires from the pty onExit handler — allow a beat
-    await new Promise((r) => setTimeout(r, 600));
+    await vi.waitFor(() => {
+      expect(service.events.list({source: "sessions", includePrivate: true}).map((event) => event.verb)).toContain("session.exited");
+    }, {timeout: 10_000, interval: 25});
 
     const rows = service.events.list({
       source: "sessions",
