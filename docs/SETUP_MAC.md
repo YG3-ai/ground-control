@@ -89,3 +89,14 @@ Checks loopback `healthz` and `worker.connected` only (no secret output).
 ## Build image dependency
 
 The relay icon build requires Python 3 with Pillow. Install the pinned dependency using python3 -m pip install -r packages/relay/scripts/requirements.txt in your Python environment. CI uses Python 3.12 and installs it explicitly. The shared package typecheck emits its declared workspace exports before downstream package checks, so a clean clone does not depend on existing dist files.
+
+### Python environment for service builds
+
+Create a project-local virtual environment with a supported Python (3.12 or later), then install the pinned image dependency:
+
+    python3 -m venv .venv
+    .venv/bin/python -m pip install -r packages/relay/scripts/requirements.txt
+    source .venv/bin/activate
+    npm run build
+
+Ground launchers prefer this project's .venv/bin after the required Node runtime, so background acceptance builds use the same Python dependency as interactive builds. Restart the worker after creating the environment.

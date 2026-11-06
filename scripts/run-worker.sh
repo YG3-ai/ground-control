@@ -11,7 +11,7 @@ if [[ ! -x "$NVM_NODE/node" ]]; then
   echo "[worker] Node 20.20.0 is required at $NVM_NODE/node; install it with nvm before starting Ground Control" >&2
   exit 1
 fi
-export PATH="$NVM_NODE:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="$NVM_NODE:$ROOT/.venv/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export npm_config_scripts_prepend_node_path="true"
 
 PORT="${RELAY_PORT:-8787}"

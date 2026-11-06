@@ -12,7 +12,7 @@ if [[ ! -x "$NVM_NODE/node" ]]; then
   echo "[relay] Node 20.20.0 is required at $NVM_NODE/node; install it with nvm before starting Ground Control" >&2
   exit 1
 fi
-export PATH="$NVM_NODE:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="$NVM_NODE:$ROOT/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export npm_config_scripts_prepend_node_path="true"
 mkdir -p "$ROOT/logs" "$ROOT/data/relay"
 if ! "$NVM_NODE/node" -e 'if (process.versions.node !== "20.20.0") process.exit(1)'; then
