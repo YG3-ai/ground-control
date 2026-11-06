@@ -388,7 +388,7 @@ export class TerminalSessionManager {
         // ignore
       }
       try {
-        live.pty.kill();
+        live.pty.kill("SIGKILL");
       } catch {
         // ignore
       }
@@ -405,12 +405,14 @@ export class TerminalSessionManager {
 
   /** Kill all PTYs (worker shutdown). */
   disposeAll(): void {
+    // A late PTY callback must not emit into the closed worker event store.
+    this.onEvent = undefined;
     for (const id of [...this.sessions.keys()]) {
       const live = this.sessions.get(id);
       if (!live) continue;
       this.clearIdle(live);
       try {
-        live.pty?.kill();
+        live.pty?.kill("SIGKILL");
       } catch {
         // ignore
       }
@@ -494,7 +496,7 @@ export class TerminalSessionManager {
       live.record.error = "idle expired";
       live.record.state = "error";
       try {
-        live.pty?.kill();
+        live.pty?.kill("SIGKILL");
       } catch {
         // ignore
       }
