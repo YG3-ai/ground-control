@@ -24,10 +24,10 @@ ChatGPT (phone) --HTTPS + OAuth--> Relay (public MCP + OAuth AS)
 
 ### Material tradeoffs
 
-1. **Default `agent_execution: host`** — Cursor/Kimi run as managed local CLIs in real checkouts (what you want for day-to-day direction). Scope ≈ what those CLIs can already do when you run them yourself.
-2. **Docker isolation** remains for the mock agent / strict demos; not required for Cursor/Kimi coordination.
+1. **Default `agent_execution: host`** — Cursor, Kimi, and Codex run as managed local CLIs in real checkouts (what you want for day-to-day direction). Scope ≈ what those CLIs can already do when you run them yourself.
+2. **Docker isolation** remains for the mock agent / strict demos; not required for local-agent coordination.
 3. **Outbound-only worker** — relay must be **public HTTPS** for ChatGPT; phone VPN alone is not enough.
-4. Jobs are durable; ChatGPT does **not** keep thinking after a turn. `supervisor.enabled` stays false until configured.
+4. Jobs are durable; the chat coordinator does **not** keep thinking after a turn. `advisor.enabled` stays false until configured.
 
 Verified on this Mac: arm64, Docker Desktop, Node 20, Cursor `agent` 2026.10.19, Kimi 2.2.0.
 
@@ -110,5 +110,5 @@ docker rmi agent-control-mock:local 2>/dev/null || true
 ## Remaining setup actions
 
 1. Keep LaunchAgents installed (done on this Mac).
-2. Leave `supervisor.enabled: false` until cost limits are set.
+2. Leave `advisor.enabled: false` until cost limits are set.
 3. Rotate the ngrok API key that was pasted in chat when convenient.

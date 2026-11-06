@@ -14,7 +14,7 @@ export interface AdapterContext {
   memoryMb: number;
   cpus: number;
   timeoutSec: number;
-  /** Host binary for cursor/kimi */
+  /** Host binary for cursor/kimi/codex */
   binary?: string;
   /** Resolved model id/alias for --model / -m */
   model?: string | null;

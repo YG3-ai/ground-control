@@ -30,9 +30,9 @@ Agent container (non-root, optional read-only rootfs)
 
 - Policy, relay credentials, OAuth secrets, and this configuration live outside `/work`
 
-## Cursor / Kimi (default: host mode)
+## Local coding agents (default: host mode)
 
-Managed child processes (not your interactive terminal). They run in a workspace under `allowed_roots` with the **same filesystem/git/network access** those CLIs normally have when you run them locally. That is intentional: ChatGPT is directing tools that already know your repos.
+Managed child processes (not your interactive terminal). Cursor, Kimi, and Codex run in a workspace under `allowed_roots` with the **same filesystem/git/network access** those CLIs normally have when you run them locally. That is intentional: ChatGPT is directing tools that already know your repos. Codex research and triage jobs use its read-only sandbox; implementation jobs use `workspace-write`.
 
 Concurrent jobs on the **same** live workspace are serialized (one active mutate at a time).
 
@@ -59,4 +59,4 @@ Anything returned via MCP is shared with OpenAI. Do not put secrets in prompts o
 
 - **Durable jobs**: agent work continues on the Mac after a ChatGPT turn ends.
 - **ChatGPT**: does not keep thinking after the conversation turn ends.
-- **Autonomous supervisor** (`supervisor.enabled`): stays off until behavior, credentials, and cost limits are configured.
+- **Advisor routing** (`advisor.enabled`): stays off until behavior, credentials, and cost limits are configured. Existing `supervisor.enabled` config remains supported as a compatibility alias.

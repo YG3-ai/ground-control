@@ -23,7 +23,7 @@ Start work from your phone. Ground Control hands missions to the right **local a
 ## What you get
 
 - **Phone-side control** — Start and steer work from your phone; agents run on your Mac in your real project folders.
-- **Local agents** — Cursor and Kimi stay on your machine, where your code already lives.
+- **Local agents** — Cursor, Kimi, and Codex stay on your machine, where your code already lives.
 - **Second brain** — Optional Markdown vault for notes, search, and capture (Obsidian works well; it is never required).
 - **YG3 marketing data** — Optional read-only YG3 connection for growth and account signals on the owner board.
 
@@ -53,7 +53,7 @@ Clone this repository and run the guided macOS setup. It installs dependencies, 
 
 - **YG3** — One-time browser sign-in during setup if you want marketing data on the board. Say yes to the background sync job and data stays fresh on a daily schedule, at login, and after wake. You do **not** sign in every session; run `npm run yg3:login` only if access is revoked.
 - **Second brain** — Point `BRAIN_*` env vars at any local Markdown folder during setup.
-- **Agents** — Set Cursor/Kimi paths in `config.yaml` when setup prompts you.
+- **Agents** — Set Cursor/Kimi/Codex paths in `config.yaml` when setup prompts you.
 
 ### 3. Start from your phone
 

@@ -140,8 +140,11 @@ export class RelayClient {
           workspace: msg.params.workspace
             ? String(msg.params.workspace)
             : undefined,
-          agent: msg.params.agent as "mock" | "cursor" | "kimi",
+          agent: msg.params.agent as "mock" | "cursor" | "kimi" | "codex",
           prompt: String(msg.params.prompt ?? ""),
+          missionId: msg.params.missionId
+            ? String(msg.params.missionId)
+            : undefined,
           idempotencyKey: msg.params.idempotencyKey
             ? String(msg.params.idempotencyKey)
             : undefined,
@@ -173,7 +176,7 @@ export class RelayClient {
       case "create_terminal_session":
         return this.service.createTerminalSession({
           ownerId,
-          kind: String(msg.params.kind ?? "shell") as "shell" | "cursor" | "kimi",
+          kind: String(msg.params.kind ?? "shell") as "shell" | "cursor" | "kimi" | "codex",
           workspace: String(msg.params.workspace ?? ""),
           model: msg.params.model ? String(msg.params.model) : undefined,
           cols: msg.params.cols != null ? Number(msg.params.cols) : undefined,
@@ -402,6 +405,22 @@ export class RelayClient {
             linkSessionId: msg.params.linkSessionId
               ? String(msg.params.linkSessionId)
               : undefined,
+          },
+        );
+      case "submit_mission_plan":
+        return this.service.submitMissionPlan(
+          ownerId,
+          String(msg.params.missionId ?? ""),
+          {
+            plan: String(msg.params.plan ?? ""),
+            findings:
+              msg.params.findings != null
+                ? String(msg.params.findings)
+                : undefined,
+            notify:
+              msg.params.notify === undefined
+                ? undefined
+                : Boolean(msg.params.notify),
           },
         );
       case "approve_mission":

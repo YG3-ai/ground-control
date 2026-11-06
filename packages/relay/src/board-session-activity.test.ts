@@ -7,8 +7,9 @@ import {
 } from "./board-session-activity.js";
 
 describe("isActiveAgentSession", () => {
-  it("counts running cursor/kimi agent sessions only", () => {
+  it("counts running Cursor, Kimi, and Codex sessions only", () => {
     expect(isActiveAgentSession({ state: "running", kind: "cursor" })).toBe(true);
+    expect(isActiveAgentSession({ state: "running", kind: "codex" })).toBe(true);
     expect(isActiveAgentSession({ state: "waiting", kind: "cursor" })).toBe(false);
     expect(isActiveAgentSession({ state: "running", kind: "shell" })).toBe(false);
   });

@@ -29,7 +29,11 @@ export class JobStore {
         owner_id TEXT NOT NULL,
         project_id TEXT NOT NULL,
         agent TEXT NOT NULL,
+        mission_id TEXT,
         prompt TEXT NOT NULL,
+        tier TEXT NOT NULL DEFAULT 'default',
+        model TEXT,
+        cursor_mode TEXT,
         status TEXT NOT NULL,
         idempotency_key TEXT,
         session_id TEXT,
@@ -63,6 +67,25 @@ export class JobStore {
         test_results TEXT
       );
     `);
+    const columns = new Set(
+      (this.db.pragma("table_info(jobs)") as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    );
+    if (!columns.has("mission_id")) {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN mission_id TEXT");
+    }
+    if (!columns.has("tier")) {
+      this.db.exec(
+        "ALTER TABLE jobs ADD COLUMN tier TEXT NOT NULL DEFAULT 'default'",
+      );
+    }
+    if (!columns.has("model")) {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN model TEXT");
+    }
+    if (!columns.has("cursor_mode")) {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN cursor_mode TEXT");
+    }
   }
 
   close(): void {
@@ -74,6 +97,8 @@ export class JobStore {
       timeoutSec: number;
       projectId: string;
       workPath?: string | null;
+      resolvedModel?: string | null;
+      cursorMode?: "ask" | "plan" | null;
     },
   ): JobRecord {
     if (input.idempotencyKey) {
@@ -87,7 +112,11 @@ export class JobStore {
       owner_id: input.ownerId,
       project_id: input.projectId,
       agent: input.agent,
+      mission_id: input.missionId ?? null,
       prompt: input.prompt,
+      tier: input.tier ?? "default",
+      model: input.resolvedModel ?? input.model ?? null,
+      cursor_mode: input.cursorMode ?? null,
       status: "queued",
       idempotency_key: input.idempotencyKey ?? null,
       session_id: null,
@@ -107,11 +136,13 @@ export class JobStore {
       this.db
         .prepare(
           `INSERT INTO jobs (
-            id, owner_id, project_id, agent, prompt, status, idempotency_key,
+            id, owner_id, project_id, agent, mission_id, prompt, tier, model,
+            cursor_mode, status, idempotency_key,
             session_id, work_path, container_id, exit_code, error, summary,
             created_at, updated_at, started_at, finished_at, timeout_sec
           ) VALUES (
-            @id, @owner_id, @project_id, @agent, @prompt, @status, @idempotency_key,
+            @id, @owner_id, @project_id, @agent, @mission_id, @prompt, @tier, @model,
+            @cursor_mode, @status, @idempotency_key,
             @session_id, @work_path, @container_id, @exit_code, @error, @summary,
             @created_at, @updated_at, @started_at, @finished_at, @timeout_sec
           )`,

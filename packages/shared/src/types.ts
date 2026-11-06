@@ -1,4 +1,4 @@
-export type AgentKind = "mock" | "cursor" | "kimi";
+export type AgentKind = "mock" | "cursor" | "kimi" | "codex";
 
 export type JobStatus =
   | "queued"
@@ -47,7 +47,7 @@ export interface AgentUsageConfig {
 export interface AgentConfig {
   enabled: boolean;
   adapter: AgentKind;
-  /** Host binary name or absolute path (cursor/kimi host mode). */
+  /** Host binary name or absolute path (cursor/kimi/codex host mode). */
   binary?: string;
   notes?: string;
   /** Credit / rate-window guards + default models. */
@@ -114,7 +114,11 @@ export interface AppConfig {
       cpus: number;
     };
   };
+  /** @deprecated Use advisor. Retained for existing config files. */
   supervisor: {
+    enabled: boolean;
+  };
+  advisor?: {
     enabled: boolean;
   };
   agents: Record<string, AgentConfig>;
@@ -128,7 +132,11 @@ export interface JobRecord {
   owner_id: string;
   project_id: string;
   agent: AgentKind;
+  mission_id: string | null;
   prompt: string;
+  tier: WorkTier;
+  model: string | null;
+  cursor_mode: "ask" | "plan" | null;
   status: JobStatus;
   idempotency_key: string | null;
   session_id: string | null;
@@ -157,7 +165,9 @@ export interface StartTaskInput {
   ownerId: string;
   agent: AgentKind;
   prompt: string;
-  /** Workspace name or path under allowed_roots (cursor/kimi). */
+  /** Mission supplying the approved plan and durable context packet. */
+  missionId?: string;
+  /** Workspace name or path under allowed_roots (cursor/kimi/codex). */
   workspace?: string;
   /** Optional registered project id (mock / aliases). */
   projectId?: string;
@@ -174,6 +184,8 @@ export interface TaskView {
   owner_id: string;
   project_id: string;
   agent: AgentKind;
+  mission_id: string | null;
+  tier: WorkTier;
   status: JobStatus;
   summary: string | null;
   error: string | null;
@@ -199,7 +211,7 @@ export interface TaskOutputView {
 }
 
 /** Interactive terminal session (PTY) — separate from managed one-shot jobs. */
-export type TerminalSessionKind = "shell" | "cursor" | "kimi";
+export type TerminalSessionKind = "shell" | "cursor" | "kimi" | "codex";
 
 export type TerminalSessionState =
   | "waiting"
@@ -243,6 +255,7 @@ export type WorkerRpcMethod =
   | "list_missions"
   | "get_mission"
   | "update_mission"
+  | "submit_mission_plan"
   | "approve_mission"
   | "complete_mission"
   | "get_usage"

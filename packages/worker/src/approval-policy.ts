@@ -40,6 +40,9 @@ export function isHybridRemoteMission(m: MissionRecord): boolean {
 export function missionRoutineScopeApproved(m: MissionRecord): boolean {
   if (!isHybridRemoteMission(m)) return false;
   if (!POST_PLAN_APPROVAL_STATUSES.has(m.status)) return false;
+  if (m.plan_revision < 1 || m.approved_revision !== m.plan_revision) {
+    return false;
+  }
   const src = m.markers?.approval_source;
   return (
     src === APPROVAL_SOURCE_CHAT_EXPLICIT ||

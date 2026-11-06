@@ -17,7 +17,7 @@ import {
 import { OutputBuffer } from "./buffer.js";
 import { SUPPORTED_CONTROL_KEYS, encodeSessionInput } from "./keys.js";
 
-export type SessionKind = "shell" | "cursor" | "kimi";
+export type SessionKind = "shell" | "cursor" | "kimi" | "codex";
 export type SessionState = "waiting" | "running" | "exited" | "error";
 
 export type ModelMeta = {
@@ -61,6 +61,7 @@ export type CreateSessionInput = {
   shellBinary?: string;
   agentBinary?: string;
   kimiBinary?: string;
+  codexBinary?: string;
   maxOutputBytes: number;
 };
 
@@ -156,10 +157,16 @@ export class TerminalSessionManager {
         const support = this.probeModelSupport("cursor", command);
         args = ["--trust", "--workspace", input.workspacePath];
         modelMeta = this.applyModel(input.model, support, args);
-      } else {
+      } else if (input.kind === "kimi") {
         const resolved = resolveExecutable(input.kimiBinary, "kimi");
         command = resolved.path;
         const support = this.probeModelSupport("kimi", command);
+        args = [];
+        modelMeta = this.applyModel(input.model, support, args);
+      } else {
+        const resolved = resolveExecutable(input.codexBinary, "codex");
+        command = resolved.path;
+        const support = this.probeModelSupport("codex", command);
         args = [];
         modelMeta = this.applyModel(input.model, support, args);
       }
@@ -414,13 +421,15 @@ export class TerminalSessionManager {
   capabilities(ownerId: string, agentCfg: {
     cursorBinary?: string;
     kimiBinary?: string;
+    codexBinary?: string;
   }) {
     this.assertOwner(ownerId);
     const cursor = this.safeResolve(agentCfg.cursorBinary, "agent");
     const kimi = this.safeResolve(agentCfg.kimiBinary, "kimi");
+    const codex = this.safeResolve(agentCfg.codexBinary, "codex");
     const shell = this.safeResolve(process.env.SHELL ?? "/bin/zsh", "zsh");
     return {
-      session_kinds: ["shell", "cursor", "kimi"] as SessionKind[],
+      session_kinds: ["shell", "cursor", "kimi", "codex"] as SessionKind[],
       supported_control_keys: SUPPORTED_CONTROL_KEYS,
       restart_behavior:
         "Interactive PTY sessions live only in the worker process. Worker restart ends them; managed jobs remain in SQLite with in-flight marked failed.",
@@ -430,12 +439,14 @@ export class TerminalSessionManager {
         shell,
         cursor,
         kimi,
+        codex,
       },
       models: {
         cursor: cursor.ok
           ? this.probeModelSupport("cursor", cursor.path)
           : null,
         kimi: kimi.ok ? this.probeModelSupport("kimi", kimi.path) : null,
+        codex: codex.ok ? this.probeModelSupport("codex", codex.path) : null,
       },
     };
   }
@@ -499,7 +510,7 @@ export class TerminalSessionManager {
     }
   }
 
-  private probeModelSupport(kind: "cursor" | "kimi", binary: string) {
+  private probeModelSupport(kind: "cursor" | "kimi" | "codex", binary: string) {
     const cached = this.modelCache.get(binary);
     const help =
       cached && Date.now() - cached.at < 300_000

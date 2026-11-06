@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
-import type { AppConfig } from "./types.js";
+import type { AgentKind, AppConfig } from "./types.js";
 
-const AgentKindSchema = z.enum(["mock", "cursor", "kimi"]);
+const AgentKindSchema = z.enum(["mock", "cursor", "kimi", "codex"]);
 
 const ConfigSchema = z.object({
   owner: z.object({
@@ -47,9 +47,11 @@ const ConfigSchema = z.object({
       cpus: z.number().positive(),
     }),
   }),
-  supervisor: z.object({
-    enabled: z.boolean(),
-  }),
+  supervisor: z
+    .object({ enabled: z.boolean().default(false) })
+    .optional()
+    .default({ enabled: false }),
+  advisor: z.object({ enabled: z.boolean().default(false) }).optional(),
   agents: z.record(
     z.object({
       enabled: z.boolean(),
@@ -134,12 +136,12 @@ export function isAgentAllowed(
   agent: string,
 ): boolean {
   if (!isAgentEnabled(config, agent)) return false;
-  // Host-mode cursor/kimi: no project registration required.
-  if ((agent === "cursor" || agent === "kimi") && !projectId) {
+  // Host-mode coding agents: no project registration required.
+  if ((agent === "cursor" || agent === "kimi" || agent === "codex") && !projectId) {
     return config.worker.agent_execution === "host";
   }
   if (!projectId) return agent === "mock" ? false : false;
   const project = getProject(config, projectId);
   if (!project) return false;
-  return project.allowed_agents.includes(agent as "mock" | "cursor" | "kimi");
+  return project.allowed_agents.includes(agent as AgentKind);
 }
