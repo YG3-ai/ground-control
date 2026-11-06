@@ -126,6 +126,8 @@ export function summarizeCodexJsonl(stdout: string): string | null {
       if (ev.type === "agent_message" && typeof ev.content === "string") {
         lastMessage = ev.content;
       }
+      const item = ev.item as {type?: string; text?: unknown} | undefined;
+      if (ev.type === "item.completed" && item?.type === "agent_message" && typeof item.text === "string") lastMessage = item.text;
       const msg = ev.message;
       if (msg && typeof msg === "object" && typeof (msg as { content?: string }).content === "string") {
         lastMessage = (msg as { content: string }).content;

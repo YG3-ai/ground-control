@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CodexAdapter, parseCodexSessionFromJsonl } from "./codex.js";
+import { CodexAdapter, parseCodexSessionFromJsonl, summarizeCodexJsonl } from "./codex.js";
 import type { JobRecord } from "@agent-control/shared";
 
 const job = (overrides: Partial<JobRecord> = {}): JobRecord => ({
@@ -62,4 +62,13 @@ describe("CodexAdapter", () => {
     );
     expect(id).toBe("abc-123");
   });
+});
+
+it("uses the final JSONL agent message as the durable handoff", () => {
+ const output=[
+  {type:"item.completed",item:{type:"command_execution",aggregated_output:"tool details"}},
+  {type:"item.completed",item:{type:"agent_message",text:"Verified the approved work."}},
+  {type:"turn.completed",usage:{input_tokens:100,output_tokens:10}}
+ ].map((event)=>JSON.stringify(event)).join("\n");
+ expect(summarizeCodexJsonl(output)).toBe("Verified the approved work.");
 });

@@ -6,7 +6,7 @@ The combined version enforces revision-bound, explicit plan approval; mission-li
 
 Verified locally on 2026-11-05:
 
-- Worker: 167 passed, 16 skipped (including Docker-gated and platform fixtures).
+- Worker: 168 passed, 16 skipped (including Docker-gated and platform fixtures).
 - Shared: 18 passed.
 - Scoped relay privacy, YG3 and Advisor MCP wiring: 66 passed.
 - Typecheck, build, setup tests, release tests and dependency-license checks passed.
@@ -19,3 +19,5 @@ The broader npm test run was bounded to 120 seconds. Its worker/shared suites pa
 Private machine configuration, environment files, data and historical internal repository objects must not be published. Runtime rollout and GitHub publication are verified separately from this candidate evidence.
 
 Fresh-clone CI exposed a missing shared-package emit before downstream typechecking. Restored the shared typecheck emit used by the public baseline and declared the relay icon builder Python/Pillow dependency explicitly in CI and setup documentation.
+
+Codex JSONL handoffs retain the final agent message rather than raw command output or usage envelopes.
