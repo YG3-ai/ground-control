@@ -7,7 +7,7 @@ DOMAIN="gui/${UID_NUM}"
 MODE="${1:-}"
 
 mkdir -p "$AGENT_DIR" "$ROOT/logs"
-chmod +x "$ROOT/scripts"/run-*.sh "$ROOT/scripts"/ensure-services.sh "$ROOT/scripts"/install-launchagents.sh "$ROOT/scripts"/uninstall-launchagents.sh "$ROOT/scripts"/install-cloudflared-launchagent.sh "$ROOT/scripts"/uninstall-cloudflared-launchagent.sh "$ROOT/scripts"/status-tunnel.sh "$ROOT/scripts"/rollback-to-ngrok.sh "$ROOT/scripts"/render-launchd-plist.sh "$ROOT/scripts"/worker-instance-lock.mjs 2>/dev/null || true
+chmod +x "$ROOT/scripts"/run-*.sh "$ROOT/scripts"/ensure-services.sh "$ROOT/scripts"/restart-ground-control.sh "$ROOT/scripts"/install-launchagents.sh "$ROOT/scripts"/uninstall-launchagents.sh "$ROOT/scripts"/install-cloudflared-launchagent.sh "$ROOT/scripts"/uninstall-cloudflared-launchagent.sh "$ROOT/scripts"/status-tunnel.sh "$ROOT/scripts"/rollback-to-ngrok.sh "$ROOT/scripts"/render-launchd-plist.sh "$ROOT/scripts"/worker-instance-lock.mjs 2>/dev/null || true
 
 stage_plists() {
   node "$ROOT/scripts/groundcontrol-launchagents.mjs" --stage \
@@ -38,7 +38,22 @@ if [[ "$MODE" == "--disruptive" ]]; then
   sleep 2
 fi
 
-for name in relay ngrok worker; do
+GC_AGENTS=()
+while IFS= read -r line; do
+  [[ -n "$line" ]] && GC_AGENTS+=("$line")
+done < <(
+  node --input-type=module -e "
+import { resolveGroundControlAgentNames } from './scripts/groundcontrol-launchagents.mjs';
+for (const n of resolveGroundControlAgentNames('$ROOT')) console.log(n);
+"
+)
+if [[ "${GC_AGENTS[*]}" != *ngrok* ]]; then
+  launchctl bootout "$DOMAIN/com.groundcontrol.ngrok" 2>/dev/null || true
+  rm -f "$AGENT_DIR/com.groundcontrol.ngrok.plist"
+  echo "skipped ngrok LaunchAgent (PUBLIC_BASE_URL is not ngrok; use Cloudflare or another tunnel)"
+fi
+
+for name in "${GC_AGENTS[@]}"; do
   label="com.groundcontrol.${name}"
   dst="$AGENT_DIR/${label}.plist"
   "$ROOT/scripts/render-launchd-plist.sh" "$label" > "$dst"

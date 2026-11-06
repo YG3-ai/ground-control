@@ -14,7 +14,7 @@ Goal: the phone board at `/board` feels like a mobile app — 4 persistent tabs 
 
 ## Canonical Brain catalog
 
-`/Users/partha/second-brain/vault/projects/ground-capabilities.md` is the single source of truth for Skills. Seeded with recorded proof only: live worker RPC, hotloader (d362b6d3, done), Sri receipt/reply confirmed, owner capture readback. `health:` is `Not checked` unless an actual source check was performed and timestamped (worker RPC, Brain search+read, growth report load, lifecycle queue read — all 2026-10-23).
+`/Users/YOU/second-brain/vault/projects/ground-capabilities.md` is the single source of truth for Skills. Seeded with recorded proof only: live worker RPC, hotloader (d362b6d3, done), Sri receipt/reply confirmed, owner capture readback. `health:` is `Not checked` unless an actual source check was performed and timestamped (worker RPC, Brain search+read, growth report load, lifecycle queue read — all 2026-10-23).
 
 ## Frontend
 

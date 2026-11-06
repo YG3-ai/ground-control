@@ -14,6 +14,7 @@ const POST_PLAN_APPROVAL_STATUSES = new Set([
   "approved",
   "implementing",
   "verifying",
+  "ready_for_review",
 ]);
 
 export type MissionAuthorization =
@@ -40,7 +41,7 @@ export function isHybridRemoteMission(m: MissionRecord): boolean {
 export function missionRoutineScopeApproved(m: MissionRecord): boolean {
   if (!isHybridRemoteMission(m)) return false;
   if (!POST_PLAN_APPROVAL_STATUSES.has(m.status)) return false;
-  if (m.plan_revision < 1 || m.approved_revision !== m.plan_revision) {
+  if (!Number.isInteger(m.plan_revision) || m.plan_revision < 1 || m.approved_revision !== m.plan_revision) {
     return false;
   }
   const src = m.markers?.approval_source;
@@ -74,6 +75,13 @@ export function isSensitiveApprovalRequest(input: {
   const blob = `${input.title}\n${input.detail}`.toLowerCase();
   if (
     /\b(deploy|publish|production|send email|external send|credential|api[_ -]?key|password|secret|oauth|token|scope expansion|permission expansion)\b/.test(
+      blob,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(delete all|wipe|rm\s+-rf|financial|charge card|payment|invoice|wire transfer|tweet|post on linkedin|send sms|email client|represent.*(company|client)|revoke access|grant admin|rotate.*key|change password)\b/.test(
       blob,
     )
   ) {

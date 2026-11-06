@@ -111,7 +111,7 @@ export function resolveSuitSwipeSnap(input: SwipeSnapInput): SwipeSnapResult {
 }
 
 /** Max veil opacity applied to the cinematic layer (not home). */
-export const WORLD_READABILITY_VEIL_MAX = 0.44;
+export const WORLD_READABILITY_VEIL_MAX = 0.62;
 
 export function worldReadabilityVeilOpacity(strength: number): number {
   if (strength <= 0) return 0;

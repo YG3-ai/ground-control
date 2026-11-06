@@ -22,6 +22,8 @@ export interface AdapterContext {
   tier?: string | null;
   /** Cursor --mode ask|plan for cheap research passes */
   cursorMode?: "ask" | "plan" | null;
+  /** Codex -c model_reasoning_effort */
+  reasoningEffort?: "minimal" | "low" | "medium" | "high" | null;
 }
 
 export type AdapterPlan =

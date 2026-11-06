@@ -11,6 +11,7 @@ export class BinaryResolveError extends Error {
 
 const DEFAULT_SEARCH_DIRS = [
   join(homedir(), ".local", "bin"),
+  join(homedir(), ".codex", "bin"),
   join(homedir(), ".kimi-code", "bin"),
   join(homedir(), ".cursor", "bin"),
   join(homedir(), ".npm-global", "bin"),
@@ -121,6 +122,14 @@ export function detectModelSupport(
       listCommand: null,
       knownModels: null,
       notes: "per-session -m/--model; does not change default_model in config.toml",
+    };
+  }
+  if (kind === "codex" && (hasLongModel || hasShortM)) {
+    return {
+      flag: "-m",
+      listCommand: null,
+      knownModels: null,
+      notes: "codex exec -m; reasoning via -c model_reasoning_effort",
     };
   }
   return {

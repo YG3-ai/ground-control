@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_KIMI_POLICY,
   UsageLedger,
+  isProviderRateLimitFailure,
   looksLikeRateLimit,
 } from "./ledger.js";
 
@@ -36,4 +37,19 @@ describe("UsageLedger", () => {
     expect(looksLikeRateLimit("Error: rate limit exceeded")).toBe(true);
     expect(looksLikeRateLimit("ok")).toBe(false);
   });
+
+  it("only treats failed executor error output as a provider limit", () => {
+    expect(isProviderRateLimitFailure({ exitCode: 0, stderr: "Error: rate limit exceeded" })).toBe(false);
+    expect(isProviderRateLimitFailure({ exitCode: 1, stderr: "" })).toBe(false);
+    expect(isProviderRateLimitFailure({ exitCode: 1, stderr: "Error: HTTP 429 rate limit exceeded" })).toBe(true);
+  });
+});
+
+it("recognizes top-level provider failures and ignores quoted command output", () => {
+ const error = JSON.stringify({type: "error", message: "HTTP 429 rate limit exceeded"});
+ expect(isProviderRateLimitFailure({exitCode: 1, stdout: error, stderr: ""})).toBe(true);
+ expect(isProviderRateLimitFailure({exitCode: 1, stdout: JSON.stringify({type: "turn.failed", error: {message: "usage limit exceeded"}}), stderr: ""})).toBe(true);
+ const command = JSON.stringify({type: "item.completed", item: {type: "command_execution", aggregated_output: error}});
+ expect(isProviderRateLimitFailure({exitCode: 1, stdout: command, stderr: ""})).toBe(false);
+ expect(isProviderRateLimitFailure({exitCode: 0, stdout: error, stderr: ""})).toBe(false);
 });

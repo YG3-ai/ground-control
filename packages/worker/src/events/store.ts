@@ -13,6 +13,7 @@ import type {
   EventSource,
   NewEvent,
 } from "./types.js";
+import { deriveMissionProgressEvents } from "../missions/mission-progress-events.js";
 
 export const EVENTS_ADAPTER_VERSION = 1;
 export const EVENTS_SCHEMA_VERSION = 1;
@@ -464,7 +465,7 @@ export class EventStore {
   private deriveMissionEvents(store: MissionStore): NewEvent[] {
     const rows = store.db
       .prepare(
-        `SELECT id, owner_id, status, created_at, updated_at, approved_at, completed_at, linked_job_ids
+        `SELECT id, owner_id, status, created_at, updated_at, approved_at, completed_at, linked_job_ids, markers
          FROM missions`,
       )
       .all() as {
@@ -476,6 +477,7 @@ export class EventStore {
       approved_at: string | null;
       completed_at: string | null;
       linked_job_ids: string;
+      markers: string;
     }[];
     const out: NewEvent[] = [];
     for (const m of rows) {
@@ -485,6 +487,15 @@ export class EventStore {
         if (Array.isArray(v)) linkedJobs = v.map(String);
       } catch {
         linkedJobs = [];
+      }
+      let markers: Record<string, string | number | boolean | null> = {};
+      try {
+        const parsed = JSON.parse(m.markers) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          markers = parsed as Record<string, string | number | boolean | null>;
+        }
+      } catch {
+        markers = {};
       }
       const base = {
         source: "missions",
@@ -534,6 +545,14 @@ export class EventStore {
           dedupeKey: "completed",
         });
       }
+      out.push(
+        ...deriveMissionProgressEvents({
+          id: m.id,
+          updated_at: m.updated_at,
+          linked_job_ids: linkedJobs,
+          markers,
+        }),
+      );
     }
     return out;
   }

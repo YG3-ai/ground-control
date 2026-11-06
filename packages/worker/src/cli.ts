@@ -1,9 +1,26 @@
 import { resolve, dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 import { loadConfig } from "@agent-control/shared";
 import { WorkerService } from "./service.js";
 import { RelayClient } from "./relay-client.js";
+
+type WorkerLockModule = {
+  acquireWorkerLock: (
+    lockRoot: string,
+    options?: { pid?: number },
+  ) => { ok: boolean; reason?: string; pid?: number; dir?: string };
+  releaseWorkerLock: (
+    lockRoot: string,
+    options?: { pid?: number },
+  ) => { ok: boolean };
+};
+
+async function loadWorkerLockModule(repoRoot: string): Promise<WorkerLockModule> {
+  const lockScript = resolve(repoRoot, "scripts/worker-instance-lock.mjs");
+  return (await import(pathToFileURL(lockScript).href)) as WorkerLockModule;
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -43,6 +60,40 @@ async function main(): Promise<void> {
   if (process.env.RELAY_URL) {
     config.relay.url = process.env.RELAY_URL;
   }
+
+  const relayUrl = config.relay.url;
+  if (
+    !relayUrl ||
+    relayUrl.includes(":///") ||
+    relayUrl.endsWith("://") ||
+    !/^wss?:\/\/.+\/worker/.test(relayUrl)
+  ) {
+    console.error(`[worker] invalid RELAY_URL "${relayUrl}"; exiting for launchd restart`);
+    process.exit(1);
+  }
+
+  const lockRoot =
+    process.env.GROUND_CONTROL_WORKER_LOCK_ROOT ??
+    resolve(repoRoot, config.worker.data_dir, ".worker-instance.lock");
+  const { acquireWorkerLock, releaseWorkerLock } =
+    await loadWorkerLockModule(repoRoot);
+  const lock = acquireWorkerLock(lockRoot, { pid: process.pid });
+  if (!lock.ok) {
+    if (lock.reason === "held") {
+      console.error(
+        `[worker] another instance holds the worker lock (pid=${lock.pid ?? "unknown"} path=${lock.dir ?? lockRoot})`,
+      );
+      process.exit(0);
+    }
+    console.error(
+      `[worker] could not acquire worker lock (${lock.reason ?? "unknown"} path=${lockRoot})`,
+    );
+    process.exit(1);
+  }
+  console.log(
+    `[worker] instance lock acquired (pid=${process.pid} path=${lock.dir ?? lockRoot})`,
+  );
+
   const dbPath = resolve(repoRoot, config.worker.data_dir, "jobs.db");
   const service = new WorkerService({
     config,
@@ -62,6 +113,7 @@ async function main(): Promise<void> {
     console.log("[worker] shutting down");
     client.stop();
     service.close();
+    releaseWorkerLock(lockRoot, { pid: process.pid });
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

@@ -70,9 +70,15 @@ else
   kick_label "com.groundcontrol.ngrok" 0
 fi
 
-if ! curl -sf "http://127.0.0.1:${PORT}/healthz" | grep -q '"connected":true'; then
-  kick_label "com.groundcontrol.worker" 0
-  wait_worker || kick_label "com.groundcontrol.worker" 0
+worker_health="$(curl -sf "http://127.0.0.1:${PORT}/healthz" 2>/dev/null || true)"
+if [[ "$worker_health" != *'"connected":true'* ]]; then
+  worker_force=0
+  if [[ -n "$worker_health" ]]; then
+    # Relay is up but the worker socket is dead — restart the process (kickstart alone is a no-op).
+    worker_force=1
+  fi
+  kick_label "com.groundcontrol.worker" "$worker_force"
+  wait_worker || kick_label "com.groundcontrol.worker" 1
   wait_worker || true
 else
   kick_label "com.groundcontrol.worker" 0

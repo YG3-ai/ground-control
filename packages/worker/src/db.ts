@@ -1,3 +1,4 @@
+import { nextRetryStreak } from "./execution-activity.js";
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -46,7 +47,8 @@ export class JobStore {
         updated_at TEXT NOT NULL,
         started_at TEXT,
         finished_at TEXT,
-        timeout_sec INTEGER NOT NULL
+        timeout_sec INTEGER NOT NULL,
+        execution_meta TEXT
       );
       CREATE UNIQUE INDEX IF NOT EXISTS jobs_owner_idempotency
         ON jobs(owner_id, idempotency_key)
@@ -85,6 +87,9 @@ export class JobStore {
     }
     if (!columns.has("cursor_mode")) {
       this.db.exec("ALTER TABLE jobs ADD COLUMN cursor_mode TEXT");
+    }
+    if (!columns.has("execution_meta")) {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN execution_meta TEXT");
     }
   }
 
@@ -130,6 +135,7 @@ export class JobStore {
       started_at: null,
       finished_at: null,
       timeout_sec: input.timeoutSec,
+      execution_meta: null,
     };
 
     try {
@@ -139,12 +145,12 @@ export class JobStore {
             id, owner_id, project_id, agent, mission_id, prompt, tier, model,
             cursor_mode, status, idempotency_key,
             session_id, work_path, container_id, exit_code, error, summary,
-            created_at, updated_at, started_at, finished_at, timeout_sec
+            created_at, updated_at, started_at, finished_at, timeout_sec, execution_meta
           ) VALUES (
             @id, @owner_id, @project_id, @agent, @mission_id, @prompt, @tier, @model,
             @cursor_mode, @status, @idempotency_key,
             @session_id, @work_path, @container_id, @exit_code, @error, @summary,
-            @created_at, @updated_at, @started_at, @finished_at, @timeout_sec
+            @created_at, @updated_at, @started_at, @finished_at, @timeout_sec, @execution_meta
           )`,
         )
         .run(job);
@@ -234,6 +240,7 @@ export class JobStore {
         | "summary"
         | "started_at"
         | "finished_at"
+        | "execution_meta"
       >
     >,
   ): JobRecord {
@@ -249,7 +256,7 @@ export class JobStore {
         `UPDATE jobs SET
           status=@status, session_id=@session_id, work_path=@work_path,
           container_id=@container_id, exit_code=@exit_code, error=@error,
-          summary=@summary, updated_at=@updated_at, started_at=@started_at,
+          summary=@summary, execution_meta=@execution_meta, updated_at=@updated_at, started_at=@started_at,
           finished_at=@finished_at
          WHERE id=@id`,
       )
@@ -288,6 +295,14 @@ export class JobStore {
         }
       | undefined;
     if (!row) throw new Error(`logs missing for ${jobId}`);
+    if (chunk.stdout || chunk.stderr) {
+      const job = this.getJob(jobId);
+      let meta: Record<string, unknown> = {};
+      try { meta = JSON.parse(job?.execution_meta ?? "{}"); } catch { /* legacy metadata */ }
+      const previous = typeof meta.watchdog_retry_streak === "number" ? meta.watchdog_retry_streak : 0;
+      this.updateJob(jobId, {execution_meta: JSON.stringify({...meta, watchdog_retry_streak: nextRetryStreak(previous, chunk)})});
+    }
+
     this.db
       .prepare(
         `UPDATE job_logs SET
@@ -379,6 +394,16 @@ export class JobStore {
       )
       .get(jobId, status) as { c: number };
     return row.c;
+  }
+
+  listInFlightHostContainerIds(): { id: string; container_id: string | null }[] {
+    return this.db
+      .prepare(
+        `SELECT id, container_id FROM jobs
+         WHERE status IN ('preparing', 'running', 'cancelling', 'awaiting_followup')
+           AND container_id IS NOT NULL`,
+      )
+      .all() as { id: string; container_id: string | null }[];
   }
 
   /** After restart: mark uncertain in-flight jobs failed without auto-retry. */

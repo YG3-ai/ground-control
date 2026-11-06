@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { killProcessGroup } from "./process-group.js";
 import type {
   IsolationHandle,
   IsolationRunResult,
@@ -56,12 +57,14 @@ export class HostProcessBackend {
       cwd: spec.cwd,
       env: { ...process.env, ...spec.env },
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
 
     const timer = setTimeout(() => {
       timedOut = true;
       killed = true;
-      child?.kill("SIGKILL");
+      if (child?.pid) killProcessGroup(child.pid, "SIGKILL");
+      else child?.kill("SIGKILL");
     }, Math.max(1, spec.timeoutSec) * 1000);
 
     child.stdout?.on("data", (d: Buffer) => {
@@ -120,10 +123,16 @@ export class HostProcessBackend {
       cancel: async (signal: "SIGTERM" | "SIGKILL" = "SIGTERM") => {
         killed = true;
         if (!child || child.killed) return;
-        child.kill(signal === "SIGKILL" ? "SIGKILL" : "SIGTERM");
+        const pid = child.pid;
+        if (pid) {
+          killProcessGroup(pid, signal);
+        } else {
+          child.kill(signal === "SIGKILL" ? "SIGKILL" : "SIGTERM");
+        }
         if (signal === "SIGTERM") {
           setTimeout(() => {
-            if (child && !child.killed) child.kill("SIGKILL");
+            if (child && !child.killed && pid) killProcessGroup(pid, "SIGKILL");
+            else if (child && !child.killed) child.kill("SIGKILL");
           }, 5_000);
         }
       },

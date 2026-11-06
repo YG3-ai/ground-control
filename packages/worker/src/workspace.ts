@@ -1,6 +1,34 @@
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
+
+/** Avoid blocking the worker event loop on slow/unresponsive volumes (e.g. external disks). */
+const READDIR_TIMEOUT_MS = 2500;
+
+type DirEnt = { name: string; isDirectory: boolean };
+
+function readdirEntries(root: string): DirEnt[] | null {
+  const script = `
+    const fs = require("fs");
+    const out = [];
+    for (const ent of fs.readdirSync(process.argv[1], { withFileTypes: true })) {
+      out.push({ name: ent.name, isDirectory: ent.isDirectory() });
+    }
+    process.stdout.write(JSON.stringify(out));
+  `;
+  const r = spawnSync(process.execPath, ["-e", script, root], {
+    encoding: "utf8",
+    timeout: READDIR_TIMEOUT_MS,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  if (r.error || r.status !== 0 || !r.stdout?.trim()) return null;
+  try {
+    return JSON.parse(r.stdout) as DirEnt[];
+  } catch {
+    return null;
+  }
+}
 
 export class WorkspaceError extends Error {
   constructor(message: string) {
@@ -57,9 +85,10 @@ export function resolveWorkspacePath(
       if (existsSync(direct) && statSync(direct).isDirectory()) {
         matches.push(direct);
       }
-      try {
-        for (const ent of readdirSync(root, { withFileTypes: true })) {
-          if (!ent.isDirectory()) continue;
+      const entries = readdirEntries(root);
+      if (entries) {
+        for (const ent of entries) {
+          if (!ent.isDirectory) continue;
           if (ent.name === candidate || ent.name.toLowerCase() === candidate.toLowerCase()) {
             matches.push(join(root, ent.name));
           }
@@ -69,8 +98,6 @@ export function resolveWorkspacePath(
             matches.push(nested);
           }
         }
-      } catch {
-        // ignore unreadable roots
       }
     }
     const unique = [...new Set(matches.map((m) => realpathSync(m)))];
@@ -124,34 +151,30 @@ export function listWorkspaceHints(allowedRoots: string[], configRoot: string): 
   const out: Array<{ name: string; path: string; root: string }> = [];
   for (const root of roots) {
     if (!existsSync(root)) continue;
-    try {
-      for (const ent of readdirSync(root, { withFileTypes: true })) {
-        if (!ent.isDirectory() || ent.name.startsWith(".")) continue;
-        const path = join(root, ent.name);
-        out.push({ name: ent.name, path, root });
-        // one nested level for monorepo-ish layouts
-        try {
-          for (const child of readdirSync(path, { withFileTypes: true })) {
-            if (!child.isDirectory() || child.name.startsWith(".")) continue;
-            // Prefer dirs that look like projects (have .git or package.json)
-            const childPath = join(path, child.name);
-            if (
-              existsSync(join(childPath, ".git")) ||
-              existsSync(join(childPath, "package.json"))
-            ) {
-              out.push({
-                name: `${ent.name}/${child.name}`,
-                path: childPath,
-                root,
-              });
-            }
-          }
-        } catch {
-          // ignore
+    const entries = readdirEntries(root);
+    if (!entries) continue;
+    for (const ent of entries) {
+      if (!ent.isDirectory || ent.name.startsWith(".")) continue;
+      const path = join(root, ent.name);
+      out.push({ name: ent.name, path, root });
+      // one nested level for monorepo-ish layouts
+      const children = readdirEntries(path);
+      if (!children) continue;
+      for (const child of children) {
+        if (!child.isDirectory || child.name.startsWith(".")) continue;
+        // Prefer dirs that look like projects (have .git or package.json)
+        const childPath = join(path, child.name);
+        if (
+          existsSync(join(childPath, ".git")) ||
+          existsSync(join(childPath, "package.json"))
+        ) {
+          out.push({
+            name: `${ent.name}/${child.name}`,
+            path: childPath,
+            root,
+          });
         }
       }
-    } catch {
-      // ignore
     }
   }
   return out.slice(0, 200);

@@ -85,6 +85,26 @@ export function acquireWorkerLock(lockRoot, options = {}) {
   return acquireWorkerLock(lockRoot, options);
 }
 
+export function probeWorkerLock(lockRoot) {
+  const { dir, pidFile, metaFile } = lockPaths(lockRoot);
+  if (!existsSync(dir)) {
+    return { held: false, dir };
+  }
+  const pid = readLockPid(pidFile);
+  if (pid === null) {
+    return { held: false, dir, stale: true };
+  }
+  const alive = pidAlive(pid);
+  let startedAt;
+  try {
+    const meta = JSON.parse(readFileSync(metaFile, "utf8"));
+    startedAt = meta.startedAt;
+  } catch {
+    // ignore
+  }
+  return { held: alive, pid, alive, dir, startedAt };
+}
+
 export function releaseWorkerLock(lockRoot, options = {}) {
   const { pid = process.pid } = options;
   const { dir, pidFile } = lockPaths(lockRoot);
@@ -102,25 +122,49 @@ export function releaseWorkerLock(lockRoot, options = {}) {
 }
 
 function usage() {
-  console.error("usage: worker-instance-lock.mjs acquire|release <lock-root>");
+  console.error(
+    "usage: worker-instance-lock.mjs acquire|release|probe <lock-root> [--pid <pid>]",
+  );
   process.exit(2);
 }
 
+function parseArgv(argv) {
+  const args = [...argv];
+  const cmd = args.shift();
+  const lockRoot = args.shift();
+  let pid = process.pid;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--pid" && args[i + 1]) {
+      pid = Number.parseInt(args[++i], 10);
+    }
+  }
+  return { cmd, lockRoot, pid };
+}
+
 function main() {
-  const [cmd, lockRoot] = process.argv.slice(2);
+  const { cmd, lockRoot, pid } = parseArgv(process.argv.slice(2));
   if (!cmd || !lockRoot) usage();
   if (cmd === "acquire") {
-    const r = acquireWorkerLock(lockRoot);
+    const r = acquireWorkerLock(lockRoot, { pid });
     if (r.ok) {
-      process.stdout.write(String(r.pid ?? process.pid));
+      process.stdout.write(String(r.pid ?? pid));
       process.exit(0);
     }
-    if (r.reason === "held") process.exit(1);
+    if (r.reason === "held") {
+      console.error(
+        `[worker-lock] held by pid=${r.pid ?? "unknown"} path=${r.dir ?? lockRoot}`,
+      );
+      process.exit(1);
+    }
     process.exit(2);
   }
   if (cmd === "release") {
-    const r = releaseWorkerLock(lockRoot);
+    const r = releaseWorkerLock(lockRoot, { pid });
     process.exit(r.ok ? 0 : 1);
+  }
+  if (cmd === "probe") {
+    process.stdout.write(`${JSON.stringify(probeWorkerLock(lockRoot))}\n`);
+    process.exit(0);
   }
   usage();
 }

@@ -3,11 +3,32 @@
  * Render and stage Ground Control relay/ngrok/worker LaunchAgents idempotently.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseLocalEnvFile } from "./load-local-env.mjs";
 
 export const GROUND_CONTROL_AGENT_NAMES = ["relay", "ngrok", "worker"];
+
+/** Ngrok LaunchAgent is only needed when PUBLIC_BASE_URL points at an ngrok hostname. */
+export function shouldUseNgrokLaunchAgent(publicBaseUrl) {
+  if (!publicBaseUrl) return true;
+  const u = publicBaseUrl.toLowerCase();
+  return (
+    u.includes("ngrok-free") ||
+    u.includes("ngrok.io") ||
+    u.includes("ngrok.app") ||
+    u.includes("ngrok.dev")
+  );
+}
+
+export function resolveGroundControlAgentNames(root) {
+  const pub = parseLocalEnvFile(root)?.PUBLIC_BASE_URL?.trim() ?? "";
+  if (shouldUseNgrokLaunchAgent(pub)) {
+    return [...GROUND_CONTROL_AGENT_NAMES];
+  }
+  return ["relay", "worker"];
+}
 
 export function agentLabel(name) {
   return `com.groundcontrol.${name}`;
@@ -28,10 +49,23 @@ export function renderLaunchAgentPlist(root, label) {
   });
 }
 
-export function renderAllGroundControlLaunchAgents({ root, launchAgentsDir }) {
+export function removeNgrokLaunchAgent({ launchAgentsDir, executor, domain }) {
+  const label = agentLabel("ngrok");
+  executor?.bootout?.(domain, label);
+  const path = join(launchAgentsDir, `${label}.plist`);
+  if (existsSync(path)) {
+    unlinkSync(path);
+  }
+}
+
+export function renderAllGroundControlLaunchAgents({
+  root,
+  launchAgentsDir,
+  agentNames = resolveGroundControlAgentNames(root),
+}) {
   mkdirSync(launchAgentsDir, { recursive: true });
   const written = [];
-  for (const name of GROUND_CONTROL_AGENT_NAMES) {
+  for (const name of agentNames) {
     const label = agentLabel(name);
     const dst = join(launchAgentsDir, `${label}.plist`);
     const xml = renderLaunchAgentPlist(root, label);
@@ -53,8 +87,12 @@ export function stageGroundControlLaunchAgents({
   domain,
   bootstrapMissing = true,
   kickstartLabels = [],
+  agentNames = resolveGroundControlAgentNames(root),
 }) {
-  const rendered = renderAllGroundControlLaunchAgents({ root, launchAgentsDir });
+  if (!shouldUseNgrokLaunchAgent(parseLocalEnvFile(root)?.PUBLIC_BASE_URL?.trim() ?? "")) {
+    removeNgrokLaunchAgent({ launchAgentsDir, executor, domain });
+  }
+  const rendered = renderAllGroundControlLaunchAgents({ root, launchAgentsDir, agentNames });
   const bootstrapped = [];
   const kickstarted = [];
 

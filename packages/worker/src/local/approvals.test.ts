@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApprovalManager } from "./approvals.js";
 
 const roots: string[] = [];
@@ -63,5 +63,77 @@ describe("ApprovalManager", () => {
         wait: false,
       }),
     ).rejects.toThrow(/unauthorized/);
+  });
+
+  it("keeps approval pending when dialog gives up (timed_out)", async () => {
+    const m = mgr("timed_out");
+    const rec = await m.request({
+      ownerId: "owner-local",
+      kind: "general",
+      title: "Harmless test",
+      detail: "dialog wait ended",
+    });
+    expect(rec.status).toBe("pending");
+    expect(m.get("owner-local", rec.id).status).toBe("pending");
+    const resolved = m.resolve("owner-local", rec.id, "denied", "test cleanup");
+    expect(resolved.status).toBe("denied");
+  });
+
+  it("reuses pending record on retry (no duplicate row)", async () => {
+    let dialogCalls = 0;
+    const dir = mkdtempSync(join(tmpdir(), "ac-appr-"));
+    roots.push(dir);
+    const m = new ApprovalManager({
+      ownerId: "owner-local",
+      dataDir: dir,
+      defaultTimeoutSec: 5,
+      notify: async () => undefined,
+      dialog: async () => {
+        dialogCalls += 1;
+        return "timed_out";
+      },
+    });
+    const first = await m.request({
+      ownerId: "owner-local",
+      kind: "general",
+      title: "Same title",
+      detail: "a",
+    });
+    const second = await m.request({
+      ownerId: "owner-local",
+      kind: "general",
+      title: "Same title",
+      detail: "b",
+    });
+    expect(second.id).toBe(first.id);
+    expect(m.list("owner-local").length).toBe(1);
+    expect(dialogCalls).toBe(2);
+    m.resolve("owner-local", first.id, "denied", "cleanup");
+  });
+
+  it("optional safety expiry resolves pending after configured delay", async () => {
+    vi.useFakeTimers();
+    const dir = mkdtempSync(join(tmpdir(), "ac-appr-"));
+    roots.push(dir);
+    const m = new ApprovalManager({
+      ownerId: "owner-local",
+      dataDir: dir,
+      pendingExpirySec: 300,
+      notify: async () => undefined,
+      dialog: async () => "timed_out",
+    });
+    const rec = await m.request({
+      ownerId: "owner-local",
+      kind: "general",
+      title: "expires later",
+      detail: "x",
+      wait: false,
+    });
+    expect(rec.status).toBe("pending");
+    await vi.advanceTimersByTimeAsync(299_000);
+    expect(m.get("owner-local", rec.id).status).toBe("pending");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(m.get("owner-local", rec.id).status).toBe("timed_out");
+    vi.useRealTimers();
   });
 });

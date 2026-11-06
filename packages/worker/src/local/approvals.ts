@@ -143,7 +143,10 @@ export class ApprovalManager {
     private readonly opts: {
       ownerId: string;
       dataDir: string;
+      /** Blocking dialog give-up (seconds); does not resolve the approval record. */
       defaultTimeoutSec?: number;
+      /** Optional safety expiry for pending records (seconds); 0 disables. */
+      pendingExpirySec?: number;
       dialog?: DialogRunner;
       notify?: Notifier;
       maxHistory?: number;
@@ -231,9 +234,30 @@ export class ApprovalManager {
     return { ...rec };
   }
 
+  private findReusablePending(input: {
+    kind: ApprovalKind;
+    title: string;
+  }): ApprovalRecord | undefined {
+    const title = input.title.slice(0, 200);
+    return [...this.records.values()].find(
+      (r) =>
+        r.status === "pending" && r.kind === input.kind && r.title === title,
+    );
+  }
+
+  private schedulePendingSafetyExpiry(id: string): void {
+    const sec = this.opts.pendingExpirySec ?? 0;
+    if (sec <= 0) return;
+    setTimeout(() => {
+      const rec = this.records.get(id);
+      if (!rec || rec.status !== "pending") return;
+      this.finish(id, "timed_out", "safety_expiry");
+    }, sec * 1000).unref?.();
+  }
+
   /**
    * Create an approval. If wait=true (default), show a Mac dialog and block
-   * until the owner responds or timeout.
+   * until the owner responds or the dialog gives up (record stays pending).
    */
   async request(
     input: {
@@ -247,9 +271,28 @@ export class ApprovalManager {
     },
   ): Promise<ApprovalRecord> {
     this.assertOwner(input.ownerId);
-    const id = randomUUID();
     const timeoutSec =
       input.timeoutSec ?? this.opts.defaultTimeoutSec ?? 120;
+
+    const reusable = this.findReusablePending(input);
+    if (reusable) {
+      if (input.wait === false) {
+        return { ...reusable };
+      }
+      const dialog = this.opts.dialog ?? defaultDialogRunner;
+      const result = await dialog({
+        title: `Ground Control · ${reusable.kind}`,
+        detail: `${reusable.title}\n\n${reusable.detail}`,
+        timeoutSec,
+      });
+      if (result === "approved" || result === "denied") {
+        return this.finish(reusable.id, result, `dialog:${result}`);
+      }
+      const still = this.records.get(reusable.id);
+      return { ...(still ?? reusable) };
+    }
+
+    const id = randomUUID();
     const rec: ApprovalRecord = {
       id,
       owner_id: input.ownerId,
@@ -264,6 +307,7 @@ export class ApprovalManager {
     };
     this.records.set(id, rec);
     this.persist();
+    this.schedulePendingSafetyExpiry(id);
     this.onEvent?.({
       source: "approvals",
       sourceRef: id,
@@ -295,7 +339,11 @@ export class ApprovalManager {
       timeoutSec,
     });
 
-    return this.finish(id, result, `dialog:${result}`);
+    if (result === "approved" || result === "denied") {
+      return this.finish(id, result, `dialog:${result}`);
+    }
+    const pending = this.records.get(id);
+    return { ...(pending ?? rec) };
   }
 
   resolve(

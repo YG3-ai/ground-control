@@ -1,3 +1,5 @@
+import { contractMarkerPayload } from "./missions/contract.js";
+import { missionSupervisorTick, resetSupervisorThrottleForTests } from "./missions/supervisor.js";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -200,4 +202,49 @@ describe("Advisor mission gate", () => {
       handoff: { job_id: first.id, status: "failed" },
     });
   });
+  it("carries a real managed job through acceptance and review with one usage start", async () => {
+    const {fixture,service}=setup();
+    service.config.advisor={enabled:true,poll_missions_sec:0};
+    const contract={version:1,steps:[
+      {id:"implement",title:"Implement fixture",kind:"implement",agent:"cursor",prompt:"Run the approved fixture"},
+      {id:"verify",title:"Check fixture",kind:"verify",acceptance_test_id:"fixture",acceptance_command:"node -e 'process.exit(0)'"}],
+      supervision:{max_step_retries:0,backoff_sec:0},evidence:{require_git_head:false,require_usability:false}};
+    const mission=service.createMission({ownerId:"owner-test",title:"Advisor acceptance",goal:"Prove the full flow",workspace:fixture,
+      markers:{project_active:true,...contractMarkerPayload(contract as never)}});
+    await service.submitMissionPlan("owner-test",mission.id,{plan:"Run fixture, verify and stage review.",notify:false});
+    await service.approveMission("owner-test",mission.id,{authorization:"chat_explicit"});
+    resetSupervisorThrottleForTests();
+    await missionSupervisorTick(service);
+    const jobId=service.getMission("owner-test",mission.id).linked_job_ids[0]!;
+    expect(jobId).toBeTruthy();
+    service.start();
+    await waitForJob(service,jobId);
+    expect(service.getTask("owner-test",jobId).status).toBe("succeeded");
+    expect(service.store.getJob(jobId)?.mission_id).toBe(mission.id);
+    expect(service.usage.db.prepare("SELECT count(*) AS n FROM usage_events WHERE job_id=? AND kind='start'").get(jobId)).toMatchObject({n:1});
+    await missionSupervisorTick(service);
+    const review=await service.submitMissionReview("owner-test",mission.id,{summary:"Fixture passed.",review_packet_version:1,notify:false});
+    expect(review.blocked).toBe(false);
+    expect(service.getMission("owner-test",mission.id).status).toBe("ready_for_review");
+    expect(service.getMission("owner-test",mission.id).handoff?.job_id).toBe(jobId);
+  });
+  it("allows mission-linked research before plan approval", async () => {
+    const {fixture,service}=setup();
+    const m=service.createMission({ownerId:"owner-test",title:"Research",goal:"Inspect",workspace:fixture});
+    const job=service.startTask({ownerId:"owner-test",agent:"cursor",missionId:m.id,workspace:fixture,prompt:"Inspect only",tier:"research"});
+    service.start();
+    await waitForJob(service,job.id);
+    expect(service.getTask("owner-test",job.id).status).toBe("succeeded");
+  });
+  it("preserves cancellation when a late successful callback arrives", async () => {
+    const {fixture,service}=setup();
+    const m=service.createMission({ownerId:"owner-test",title:"Stopped",goal:"Respect stop",workspace:fixture});
+    await service.submitMissionPlan("owner-test",m.id,{plan:"Run fixture.",notify:false});
+    await service.approveMission("owner-test",m.id,{authorization:"chat_explicit"});
+    const job=service.startTask({ownerId:"owner-test",agent:"cursor",missionId:m.id,workspace:fixture,prompt:"Run",tier:"implement"});
+    service.missions.update("owner-test",m.id,{status:"cancelled"});
+    (service as any).finishJob(job.id,{}, {stdout:"",stderr:"",exitCode:0,killed:false,timedOut:false},"live",fixture);
+    expect(service.getMission("owner-test",m.id).status).toBe("cancelled");
+  });
+
 });

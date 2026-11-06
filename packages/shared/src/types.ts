@@ -28,7 +28,14 @@ export interface ProjectConfig {
   credentials: string[];
 }
 
-export type WorkTier = "research" | "triage" | "implement" | "bugfix" | "default";
+export type WorkTier =
+  | "research"
+  | "triage"
+  | "implement"
+  | "bugfix"
+  | "verification"
+  | "high_risk"
+  | "default";
 
 export interface AgentUsageConfig {
   /** Rolling window seconds (Kimi ≈ 18000 = 5h). */
@@ -41,6 +48,8 @@ export interface AgentUsageConfig {
   implement_model?: string;
   /** Cursor only: --mode ask|plan for research/triage. */
   research_mode?: "ask" | "plan";
+  /** Codex only: default reasoning effort override via -c model_reasoning_effort */
+  default_reasoning_effort?: "minimal" | "low" | "medium" | "high";
   cooldown_after_rate_limit_sec?: number;
 }
 
@@ -103,6 +112,9 @@ export interface AppConfig {
       port?: number;
       browser_requires_approval?: boolean;
       approval_timeout_sec?: number;
+      approval_pending_expiry_sec?: number;
+      /** permanent = authenticated ChatGPT owner authorizes routine Mac work without duplicate dialogs */
+      owner_control_mode?: "permanent" | "off";
     };
     isolation: {
       backend: "docker" | "mock-fail";
@@ -113,13 +125,34 @@ export interface AppConfig {
       memory_mb: number;
       cpus: number;
     };
+    /** Token conservation routing for start_task + mission supervisor. */
+    conservation?: Record<string, unknown>;
   };
   /** @deprecated Use advisor. Retained for existing config files. */
   supervisor: {
     enabled: boolean;
+    poll_missions_sec?: number;
+    default_max_step_retries?: number;
+    /** Max missions the queue may run concurrently (review/verify do not hold slots). */
+    queue_max_concurrent?: number;
+    /** Lease for a running queue claim before stale recovery re-queues. */
+    queue_claim_lease_sec?: number;
+    /** When true, queue tick may call submit_mission_review after evidence gates pass. */
+    queue_auto_review?: boolean;
+    /** Stop a running supervised job when it has produced no output for this interval. */
+    job_stale_sec?: number;
+    /** Repeated connection-retry messages that make a job unavailable. */
+    connection_retry_limit?: number;
   };
   advisor?: {
     enabled: boolean;
+    poll_missions_sec?: number;
+    default_max_step_retries?: number;
+    queue_max_concurrent?: number;
+    queue_claim_lease_sec?: number;
+    queue_auto_review?: boolean;
+    job_stale_sec?: number;
+    connection_retry_limit?: number;
   };
   agents: Record<string, AgentConfig>;
   /** Client roster for bugfix + update-email drafts. */
@@ -150,6 +183,8 @@ export interface JobRecord {
   started_at: string | null;
   finished_at: string | null;
   timeout_sec: number;
+  /** JSON conservation / usage metadata for job detail UI. */
+  execution_meta?: string | null;
 }
 
 export interface FollowupRecord {
@@ -177,6 +212,19 @@ export interface StartTaskInput {
   tier?: WorkTier;
   /** Explicit model override (still subject to usage pacing). */
   model?: string;
+  /** Owner override: force agent/model/reasoning for this job. */
+  conservation_override?: {
+    agent?: "codex" | "cursor";
+    model?: string;
+    reasoning_effort?: "minimal" | "low" | "medium" | "high";
+    task_class?:
+      | "lookup_triage"
+      | "research"
+      | "implementation"
+      | "verification"
+      | "high_risk";
+    note?: string;
+  };
 }
 
 export interface TaskView {
@@ -197,6 +245,7 @@ export interface TaskView {
   started_at: string | null;
   finished_at: string | null;
   followups_queued: number;
+  conservation?: Record<string, unknown> | null;
 }
 
 export interface TaskOutputView {
@@ -258,6 +307,15 @@ export type WorkerRpcMethod =
   | "submit_mission_plan"
   | "approve_mission"
   | "complete_mission"
+  | "get_mission_timeline"
+  | "record_mission_deployment"
+  | "submit_mission_review"
+  | "enqueue_mission_project"
+  | "update_mission_queue_entry"
+  | "cancel_mission_queue_entry"
+  | "cancel_mission_project"
+  | "reschedule_mission_queue_entry"
+  | "list_mission_queue"
   | "get_usage"
   | "list_events"
   | "rebuild_events"

@@ -1,0 +1,10 @@
+{
+  "version": "e709f2dc6f98",
+  "source": "apps/menu-bar/Resources/AppIcon.iconset/icon_512x512@2x.png",
+  "sizes": {
+    "icon-32.png": 32,
+    "icon-180.png": 180,
+    "icon-192.png": 192,
+    "icon-512.png": 512
+  }
+}

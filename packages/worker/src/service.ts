@@ -14,6 +14,12 @@ import {
   isAgentAllowed,
   isAgentEnabled,
   redactSecrets,
+  assertAgentAllowedForNewWork,
+  buildConservationPlan,
+  conservationPlanToMeta,
+  parseConservationMeta,
+  deriveMissionDeliveryPresentation,
+  buildNeedsYouRail,
 } from "@agent-control/shared";
 import { AuthError, JobStore, isTerminal } from "./db.js";
 import { getAdapter } from "./adapters/index.js";
@@ -31,7 +37,18 @@ import {
   workspaceLabel,
   WorkspaceError,
 } from "./workspace.js";
+import {
+  killProcessGroup,
+  parseHostProcessGroupPid,
+} from "./isolation/process-group.js";
+import { missionTimelineFromEvents } from "./missions/timeline.js";
+import {
+  deploymentRecordMarkers,
+} from "./missions/deployment-record.js";
 import { BinaryResolveError, resolveExecutable } from "./binary-resolve.js";
+import { probeCodexBinary } from "./codex/detect.js";
+import { parseCodexUsageFromJsonl } from "./adapters/codex.js";
+import { isHostManagedAgent, hostBinaryFallback } from "./host-agents.js";
 import {
   TerminalSessionManager,
   type SessionKind,
@@ -50,21 +67,52 @@ import {
   resolveMissionApprovalMode,
   ROUTINE_APPROVED_SCOPE,
 } from "./approval-policy.js";
+import { buildOwnerControlPolicySurface } from "./owner-control-policy.js";
 import { openUrlInBrowser } from "./local/browser.js";
 import { startLocalControlServer } from "./local/control-server.js";
 import {
   MissionStore,
   MISSION_STATUSES,
-  type MissionRecord,
   type MissionStatus,
+  type MissionRecord,
 } from "./missions/store.js";
+import {
+  contractFromMission,
+  contractMarkerPayload,
+  acknowledgeOwnerCheckpointMarker,
+} from "./missions/contract.js";
+import {
+  compileAndMarkContractFromQualification,
+  enrollApprovedMissionInQueue,
+} from "./missions/compile-contract.js";
+import {
+  assertQualificationForV2Approval,
+  isGroundDeliveryV2Mission,
+} from "./missions/qualification.js";
+import {
+  assertCanComplete,
+  assertCanSubmitReview,
+  assertPlanEditAllowed,
+  resolveGitHead,
+} from "./missions/completion-gate.js";
+import {
+  missionHasActiveSupervisorJob,
+  missionSupervisorOnJobFinished,
+} from "./missions/supervisor.js";
+import { recoverMissionSupervisionOnWorkerStart } from "./missions/recovery.js";
+import { MissionQueueStore, type MissionQueueState } from "./missions/queue-store.js";
+import {
+  missionQueueOnJobFinished,
+  missionQueueTick,
+} from "./missions/queue-scheduler.js";
+import { inventoryMissionQueueDrift } from "./missions/queue-lifecycle.js";
 import { buildBoardSystemFocus } from "./board-system-focus.js";
 import {
   UsageLedger,
-  DEFAULT_CODEX_POLICY,
   DEFAULT_CURSOR_POLICY,
+  DEFAULT_CODEX_POLICY,
   DEFAULT_KIMI_POLICY,
-  looksLikeRateLimit,
+  isProviderRateLimitFailure,
   resolveModelForTier,
   type AgentUsagePolicy,
   type UsageAgent,
@@ -95,6 +143,7 @@ export class WorkerService {
   readonly sessions: TerminalSessionManager;
   readonly approvals: ApprovalManager;
   readonly missions: MissionStore;
+  readonly missionQueue: MissionQueueStore;
   readonly usage: UsageLedger;
   readonly clientRequests: ClientRequestStore;
   readonly events: EventStore;
@@ -112,12 +161,29 @@ export class WorkerService {
   /** Per-job model/tier (not yet columns on jobs table). */
   private readonly jobMeta = new Map<
     string,
-    { tier: string; model: string | null; cursorMode: "ask" | "plan" | null }
+    {
+      tier: string;
+      model: string | null;
+      cursorMode: "ask" | "plan" | null;
+      reasoningEffort: "minimal" | "low" | "medium" | "high" | null;
+      conservationMeta: string | null;
+    }
   >();
+  private readonly retryLoopGuard = new Map<string, { count: number; at: number }>();
   private ticking = false;
   private running = false;
   private timer: NodeJS.Timeout | null = null;
   readonly configRoot: string;
+
+  /** advisor is canonical; supervisor remains a compatible legacy switch. */
+  private get advisorEnabled(): boolean {
+    return this.config.advisor?.enabled ?? this.config.supervisor.enabled;
+  }
+
+  /** Canonical Advisor settings, with the old supervisor block as an alias. */
+  private get advisorConfig() {
+    return this.config.advisor ?? this.config.supervisor;
+  }
 
   constructor(opts: { config: AppConfig; dbPath: string; configRoot: string }) {
     this.config = opts.config;
@@ -142,6 +208,7 @@ export class WorkerService {
         "approvals",
       ),
       defaultTimeoutSec: lc?.approval_timeout_sec ?? 120,
+      pendingExpirySec: lc?.approval_pending_expiry_sec ?? 0,
     });
     this.missions = new MissionStore(
       join(
@@ -149,6 +216,7 @@ export class WorkerService {
         "missions.db",
       ),
     );
+    this.missionQueue = new MissionQueueStore(this.missions.db);
     this.usage = new UsageLedger(
       join(resolve(opts.configRoot, opts.config.worker.data_dir), "usage.db"),
     );
@@ -192,20 +260,30 @@ export class WorkerService {
     return join(this.dataDir, "jobs");
   }
 
-  private get advisorEnabled(): boolean {
-    return this.config.advisor?.enabled ?? this.config.supervisor.enabled;
-  }
-
   start(): void {
+    // Do not probe Codex while bringing the worker up. The probe uses a
+    // synchronous CLI invocation (including `codex doctor`), so doing it here
+    // can block the event loop before the local-control listener and relay
+    // WebSocket are established. It remains demand-driven and cached at the
+    // metadata call sites below.
+    for (const row of this.store.listInFlightHostContainerIds()) {
+      const pid = parseHostProcessGroupPid(row.container_id);
+      if (pid) killProcessGroup(pid, "SIGTERM");
+    }
     const recovered = this.store.recoverAfterRestart();
     if (recovered > 0) {
       console.error(`[worker] marked ${recovered} in-flight job(s) failed after restart`);
+    }
+    const missionFixes = recoverMissionSupervisionOnWorkerStart(this);
+    if (missionFixes > 0) {
+      console.error(
+        `[worker] reconciled ${missionFixes} supervised mission state(s) after restart`,
+      );
     }
     this.running = true;
     this.timer = setInterval(() => {
       void this.tick();
     }, 500);
-    void this.tick();
     this.startLocalControl();
   }
 
@@ -335,6 +413,72 @@ export class WorkerService {
   ) {
     this.assertOwner(ownerId);
     return { events: this.events.list(opts) };
+  }
+
+  resolveMissionWorkPath(mission: MissionRecord): string | null {
+    if (typeof mission.markers.supervisor_work_path === "string") {
+      return mission.markers.supervisor_work_path;
+    }
+    if (!mission.workspace) return null;
+    try {
+      return resolveWorkspacePath(
+        mission.workspace,
+        this.config.worker.allowed_roots,
+        this.configRoot,
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  getMissionTimeline(ownerId: string, missionId: string) {
+    this.assertOwner(ownerId);
+    const mission = this.getMission(ownerId, missionId);
+    const queueEntry = this.missionQueue.getByMissionId(ownerId, missionId);
+    const events = this.events
+      .list({ limit: 500, includePrivate: false })
+      .filter(
+        (e) =>
+          (e.source === "missions" && e.source_ref === missionId) ||
+          e.evidence_refs.includes(`mission:${missionId}`) ||
+          mission.linked_job_ids.some(
+            (j) => e.source === "jobs" && e.source_ref === j,
+          ),
+      );
+    return missionTimelineFromEvents({
+      mission,
+      events,
+      queueState: queueEntry?.queue_state ?? null,
+      hasActiveSupervisorJob: missionHasActiveSupervisorJob(mission, this.store),
+    });
+  }
+
+  recordMissionDeployment(
+    ownerId: string,
+    missionId: string,
+    input: { kind: "staging" | "owner_release" | "none" },
+  ) {
+    this.assertOwner(ownerId);
+    const mission = this.getMission(ownerId, missionId);
+    const contract = contractFromMission(mission);
+    const policyMode =
+      contract?.deployment_policy?.mode ??
+      (typeof mission.markers.deployment_policy_mode === "string"
+        ? (mission.markers.deployment_policy_mode as
+            | "no_production"
+            | "staging_only"
+            | "owner_release_required")
+        : "owner_release_required");
+    const gitHead = resolveGitHead(this.resolveMissionWorkPath(mission));
+    const now = new Date().toISOString();
+    return this.missions.update(ownerId, missionId, {
+      markers: deploymentRecordMarkers({
+        kind: input.kind,
+        recordedAt: now,
+        gitHead,
+        policyMode,
+      }),
+    });
   }
 
   /** Re-materialize the event spine from source stores (idempotent). */
@@ -559,6 +703,7 @@ export class WorkerService {
             j.status === "running" ||
             j.status === "awaiting_followup"),
       ).length;
+    const cursor = this.usage.snapshot("cursor", this.usagePolicy("cursor"));
     const codexInFlight = this.store
       .listRecent(ownerId, 50)
       .filter(
@@ -569,17 +714,25 @@ export class WorkerService {
             j.status === "running" ||
             j.status === "awaiting_followup"),
       ).length;
-    const cursor = this.usage.snapshot("cursor", this.usagePolicy("cursor"));
     const kimi = this.usage.snapshot("kimi", this.usagePolicy("kimi"));
     const codex = this.usage.snapshot("codex", this.usagePolicy("codex"));
+    const codexProbe = probeCodexBinary({
+      configuredBinary: this.config.agents.codex?.binary,
+    });
     return {
       at: new Date().toISOString(),
       cursor: { ...cursor, in_flight: cursorInFlight },
-      codex: { ...codex, in_flight: codexInFlight },
+      codex: {
+        ...codex,
+        in_flight: codexInFlight,
+        probe: codexProbe,
+        note: "Primary noninteractive agent via `codex exec --json`. Conservation routing picks model + reasoning effort per task class.",
+      },
       kimi: {
         ...kimi,
         in_flight: kimiInFlight,
-        note: "Kimi Code uses a rolling ~5h usage window. Ground Control paces starts (max_starts_per_window + min_gap) so you do not burn it in one burst. Prefer bugfix batches over chatty loops; resume sessions when possible.",
+        retired_for_new_work: true,
+        note: "Historical Kimi usage only — new work is blocked. Legacy rolling-window stats remain for past jobs.",
       },
       clients: this.clientDefs().map((c) => c.id),
       queued_bugfixes: this.clientRequests.list(ownerId, {
@@ -627,7 +780,7 @@ export class WorkerService {
       body: input.body,
       missionId: mission.id,
     });
-    return { request: req, mission, next: "run_next_bugfix when kimi budget allows" };
+    return { request: req, mission, next: "run_next_bugfix when codex budget allows" };
   }
 
   listClientRequests(
@@ -666,7 +819,7 @@ export class WorkerService {
   }
 
   /**
-   * Pull the next queued client bug email and start a paced Kimi bugfix job.
+   * Pull the next queued client bug email and start a paced Codex bugfix job.
    */
   runNextBugfix(ownerId: string) {
     this.assertOwner(ownerId);
@@ -701,7 +854,7 @@ export class WorkerService {
     try {
       const task = this.startTask({
         ownerId,
-        agent: "kimi",
+        agent: "codex",
         workspace: oldest.workspace,
         prompt,
         tier: "bugfix",
@@ -721,7 +874,7 @@ export class WorkerService {
         started: true as const,
         request: oldest,
         task,
-        usage: this.getUsage(ownerId).kimi,
+        usage: this.getUsage(ownerId).codex,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -730,8 +883,8 @@ export class WorkerService {
           started: false as const,
           reason: msg,
           request: oldest,
-          usage: this.getUsage(ownerId).kimi,
-          hint: "Left queued. Retry run_next_bugfix after retry_after_sec (protects Kimi 5h window).",
+          usage: this.getUsage(ownerId).codex,
+          hint: "Left queued. Retry run_next_bugfix after retry_after_sec.",
         };
       }
       throw err;
@@ -753,8 +906,10 @@ export class WorkerService {
     if (input.kind === "cursor" && !isAgentEnabled(this.config, "cursor")) {
       throw new AuthError("agent not enabled: cursor");
     }
-    if (input.kind === "kimi" && !isAgentEnabled(this.config, "kimi")) {
-      throw new AuthError("agent not enabled: kimi");
+    if (input.kind === "kimi") {
+      throw new AuthError(
+        "kimi_retired: Kimi interactive sessions are disabled. Use codex or cursor.",
+      );
     }
     if (input.kind === "codex" && !isAgentEnabled(this.config, "codex")) {
       throw new AuthError("agent not enabled: codex");
@@ -781,8 +936,8 @@ export class WorkerService {
         rows: input.rows,
         idleSec: input.idleSec,
         agentBinary: this.config.agents.cursor?.binary,
-        kimiBinary: this.config.agents.kimi?.binary,
         codexBinary: this.config.agents.codex?.binary,
+        kimiBinary: this.config.agents.kimi?.binary,
         maxOutputBytes: this.config.worker.max_output_bytes,
       });
     } catch (err) {
@@ -833,11 +988,16 @@ export class WorkerService {
   }
 
   terminalCapabilities(ownerId: string) {
-    return this.sessions.capabilities(ownerId, {
-      cursorBinary: this.config.agents.cursor?.binary,
-      kimiBinary: this.config.agents.kimi?.binary,
-      codexBinary: this.config.agents.codex?.binary,
-    });
+    return {
+      ...this.sessions.capabilities(ownerId, {
+        cursorBinary: this.config.agents.cursor?.binary,
+        codexBinary: this.config.agents.codex?.binary,
+        kimiBinary: this.config.agents.kimi?.binary,
+      }),
+      codex_probe: probeCodexBinary({
+        configuredBinary: this.config.agents.codex?.binary,
+      }),
+    };
   }
 
   /**
@@ -879,12 +1039,19 @@ export class WorkerService {
       includeResolved: true,
       limit: 10,
     });
-    const missions = this.missions.list(ownerId, { limit: 20 });
+    const missions = this.missions.list(ownerId, { limit: 20 }).map((m) =>
+      this.enrichMissionPresentation(m),
+    );
     const lc = this.config.worker.local_control;
     return {
       at: new Date().toISOString(),
       owner: this.config.owner,
       agent_execution: this.config.worker.agent_execution,
+      supervisor: {
+        enabled: this.advisorConfig.enabled,
+        poll_missions_sec: this.advisorConfig.poll_missions_sec ?? 2,
+        queue_max_concurrent: this.advisorConfig.queue_max_concurrent ?? 1,
+      },
       enabled_agents: Object.entries(this.config.agents)
         .filter(([, v]) => v.enabled)
         .map(([k]) => k),
@@ -897,11 +1064,14 @@ export class WorkerService {
         enabled: lc?.enabled === true,
         browser_requires_approval: lc?.browser_requires_approval !== false,
         approval_timeout_sec: lc?.approval_timeout_sec ?? 120,
+        approval_dialog_wait_sec: lc?.approval_timeout_sec ?? 120,
+        approval_pending_expiry_sec: lc?.approval_pending_expiry_sec ?? 0,
         whiteboard_url: `http://${lc?.bind ?? "127.0.0.1"}:${lc?.port ?? 8788}/`,
         menu_bar_url: `http://${lc?.bind ?? "127.0.0.1"}:${lc?.port ?? 8788}`,
       },
+      approval_policy: buildOwnerControlPolicySurface(lc),
       note:
-        "Orchestration (hybrid_remote): create_mission → research within scope → submit_mission_plan → approve_mission authorization=chat_explicit after owner consent (or require_dialog for Mac) → start_task with mission_id → verify → complete_mission + notify. Any MCP-capable chat coordinator can continue from the durable mission packet. Sensitive actions: request_local_approval only. Re-call get_situation to refresh.",
+        "Orchestration (hybrid_remote + owner_control when permanent): authenticated owner in ChatGPT authorizes routine repo/shell/test/build/safe-restart/deploy/self-repair without duplicate Mac dialogs (logged). Mac confirmation still required for destructive deletion, financial actions, external representational sends, credentials/access changes, ambiguous irreversible work, and browser_open by default. create_mission → research/terminal → plan in chat → approve_mission authorization=chat_explicit → implement. Sensitive: request_local_approval only. Pending approvals survive dialog timeout (approval_pending_expiry_sec=0). Re-call get_situation to refresh.",
       redaction_note: REDACTION_DISCLAIMER,
     };
   }
@@ -926,10 +1096,22 @@ export class WorkerService {
       }
     }
     const usage = this.getUsage(ownerId);
-    const systemFocus = buildBoardSystemFocus(situation.missions, situation.active_tasks);
+    const systemFocus = buildBoardSystemFocus(
+      situation.missions as MissionRecord[],
+      situation.active_tasks,
+    );
+    const mission_queue = this.listMissionQueueBoard(ownerId);
+    const mission_queue_drift = inventoryMissionQueueDrift(
+      this.missionQueue.list(ownerId, { limit: 200 }),
+      (missionId) => this.missions.get(ownerId, missionId),
+    );
+    const needs_you = buildNeedsYouRail(situation.missions);
     return {
       ...situation,
       columns: byStatus,
+      mission_queue,
+      mission_queue_drift,
+      needs_you,
       kpis,
       usage,
       ...systemFocus,
@@ -948,8 +1130,8 @@ export class WorkerService {
           (a) => a.status === "pending",
         ).length,
         kimi_starts_left: usage.kimi.starts_remaining,
-        cursor_starts_left: usage.cursor.starts_remaining,
         codex_starts_left: usage.codex.starts_remaining,
+        cursor_starts_left: usage.cursor.starts_remaining,
         queued_bugfixes: usage.queued_bugfixes,
       },
     };
@@ -981,6 +1163,17 @@ export class WorkerService {
     return m;
   }
 
+  private enrichMissionPresentation(m: MissionRecord) {
+    const queueEntry = this.missionQueue.getByMissionId(this.config.owner.id, m.id);
+    const hasActive = missionHasActiveSupervisorJob(m, this.store);
+    const presentation = deriveMissionDeliveryPresentation(
+      m,
+      queueEntry ? { queue_state: queueEntry.queue_state } : null,
+      hasActive,
+    );
+    return { ...m, ...presentation };
+  }
+
   updateMission(
     ownerId: string,
     id: string,
@@ -1000,17 +1193,13 @@ export class WorkerService {
     this.assertOwner(ownerId);
     const cur = this.getMission(ownerId, id);
     if (patch.status === "approved") {
-      throw new AuthError(
-        "use approve_mission to record explicit approval for the current plan revision",
-      );
+      throw new AuthError("use approve_mission to record explicit approval for the current plan revision");
     }
-    if (
-      (patch.status === "implementing" || patch.status === "verifying") &&
-      !missionRoutineScopeApproved(cur)
-    ) {
-      throw new AuthError(
-        `mission plan revision ${cur.plan_revision} must be approved before implementation`,
-      );
+    if (patch.plan !== undefined && patch.plan !== cur.plan) {
+      const planGate = assertPlanEditAllowed(cur);
+      if (!planGate.ok) {
+        throw new AuthError(planGate.message);
+      }
     }
     if (isMissionWorkspaceScopeExpansion(cur, patch.workspace)) {
       throw new AuthError(
@@ -1068,11 +1257,25 @@ export class WorkerService {
           error: `plan not approved (status=${approval.status})`,
         };
       }
+      const { mission: prepared, contractMarkers } = this.prepareMissionApprovalState(
+        ownerId,
+        m,
+      );
       const updated = this.missions.update(ownerId, id, {
         status: "approved",
-        markers: hybridRemoteMarkers(APPROVAL_SOURCE_LOCAL_DIALOG, opts?.approvedScope),
+        workspace: prepared.workspace ?? undefined,
+        markers: {
+          ...hybridRemoteMarkers(APPROVAL_SOURCE_LOCAL_DIALOG, opts?.approvedScope),
+          ...contractMarkers,
+        },
       });
-      return { mission: updated, approval, approved: true as const };
+      void updated;
+      this.finalizeGroundDeliveryEnrollment(ownerId, id);
+      return {
+        mission: this.getMission(ownerId, id),
+        approval,
+        approved: true as const,
+      };
     }
     if (opts?.authorization !== APPROVAL_SOURCE_CHAT_EXPLICIT) {
       throw new AuthError(
@@ -1080,12 +1283,22 @@ export class WorkerService {
       );
     }
     const scope = (opts?.approvedScope ?? ROUTINE_APPROVED_SCOPE).slice(0, 120);
+    const { mission: prepared, contractMarkers } = this.prepareMissionApprovalState(
+      ownerId,
+      m,
+    );
     const updated = this.missions.update(ownerId, id, {
       status: "approved",
-      markers: hybridRemoteMarkers(APPROVAL_SOURCE_CHAT_EXPLICIT, scope),
+      workspace: prepared.workspace ?? undefined,
+      markers: {
+        ...hybridRemoteMarkers(APPROVAL_SOURCE_CHAT_EXPLICIT, scope),
+        ...contractMarkers,
+      },
     });
+    void updated;
+    this.finalizeGroundDeliveryEnrollment(ownerId, id);
     return {
-      mission: updated,
+      mission: this.getMission(ownerId, id),
       approval: null,
       approved: true as const,
       approval_source: APPROVAL_SOURCE_CHAT_EXPLICIT,
@@ -1094,6 +1307,66 @@ export class WorkerService {
     };
   }
 
+  private prepareMissionApprovalState(
+    ownerId: string,
+    m: MissionRecord,
+  ): {
+    mission: MissionRecord;
+    contractMarkers: Record<string, string | number | boolean | null>;
+  } {
+    if (isGroundDeliveryV2Mission(m)) {
+      let mission = m;
+      try {
+        const packet = assertQualificationForV2Approval(m);
+        mission = compileAndMarkContractFromQualification(
+          ownerId,
+          m,
+          packet,
+          this.missions,
+        );
+      } catch (err) {
+        throw new AuthError(err instanceof Error ? err.message : String(err));
+      }
+      const contract = contractFromMission(mission);
+      if (!contract) {
+        throw new AuthError("ground delivery v2: contract compile failed");
+      }
+      return {
+        mission,
+        contractMarkers: {
+          ...contractMarkerPayload(contract),
+          approved_contract_version: contract.version,
+          supervision_state: "idle",
+        },
+      };
+    }
+    const contract = contractFromMission(m);
+    const contractMarkers: Record<string, string | number | boolean | null> = contract
+      ? {
+          ...contractMarkerPayload(contract),
+          approved_contract_version: contract.version,
+          supervision_state: "idle",
+        }
+      : {
+          supervision_state: m.markers.supervision_state ?? null,
+        };
+    return { mission: m, contractMarkers };
+  }
+
+  private finalizeGroundDeliveryEnrollment(ownerId: string, missionId: string): void {
+    if (!this.advisorEnabled) return;
+    const m = this.getMission(ownerId, missionId);
+    if (!isGroundDeliveryV2Mission(m)) return;
+    enrollApprovedMissionInQueue({
+      ownerId,
+      missionId,
+      missionStore: this.missions,
+      missionQueue: this.missionQueue,
+      enqueue: (oid, input) => this.enqueueMissionProject(oid, input),
+    });
+  }
+
+  /** Records a new plan revision; MissionStore clears stale approval revisions. */
   async submitMissionPlan(
     ownerId: string,
     id: string,
@@ -1117,6 +1390,91 @@ export class WorkerService {
     return updated;
   }
 
+  acknowledgeMissionOwnerCheckpoint(ownerId: string, missionId: string, stepId: string) {
+    this.assertOwner(ownerId);
+    const m = this.getMission(ownerId, missionId);
+    const contract = contractFromMission(m);
+    if (!contract) {
+      throw new AuthError("mission has no contract");
+    }
+    const step = contract.steps.find((s) => s.id === stepId);
+    if (!step || step.kind !== "owner_checkpoint") {
+      throw new AuthError(`step ${stepId} is not an owner checkpoint`);
+    }
+    return this.missions.update(ownerId, missionId, {
+      markers: {
+        ...acknowledgeOwnerCheckpointMarker(stepId),
+        supervision_state: "idle",
+        owner_checkpoint_pending: null,
+        block_reason: null,
+        next_owner_action: null,
+      },
+    });
+  }
+
+  private missionJobsMap(mission: MissionRecord): Map<string, import("@agent-control/shared").JobRecord> {
+    const map = new Map<string, import("@agent-control/shared").JobRecord>();
+    for (const jobId of mission.linked_job_ids) {
+      const job = this.store.getJob(jobId);
+      if (job) map.set(jobId, job);
+    }
+    return map;
+  }
+
+  async submitMissionReview(
+    ownerId: string,
+    id: string,
+    input: {
+      summary: string;
+      markers?: Record<string, string | number | boolean | null>;
+      review_packet_version?: number;
+      notify?: boolean;
+    },
+  ) {
+    this.assertOwner(ownerId);
+    const m = this.getMission(ownerId, id);
+    const gate = assertCanSubmitReview(m, this.missionJobsMap(m));
+    if (!gate.ok) {
+      const blocked = this.missions.update(ownerId, id, {
+        status: "blocked",
+        markers: {
+          block_reason: `${gate.code}: ${gate.message}`,
+          supervision_state: "blocked",
+        },
+      });
+      return { blocked: true as const, gate, mission: blocked };
+    }
+    const updated = this.missions.update(ownerId, id, {
+      status: "ready_for_review",
+      summary: input.summary,
+      markers: {
+        ...input.markers,
+        review_state: "ready_for_review",
+        project_active: false,
+        queue_capacity_released: true,
+        review_packet_version:
+          input.review_packet_version ?? m.markers.review_packet_version ?? 1,
+      },
+    });
+    const queueEntry = this.missionQueue.getByMissionId(ownerId, id);
+    if (queueEntry && queueEntry.queue_state !== "cancelled") {
+      this.missionQueue.update(ownerId, queueEntry.id, {
+        queue_state: "ready_for_review",
+        claim_token: null,
+        claimed_at: null,
+        lease_until: null,
+      });
+    }
+    if (input.notify !== false) {
+      await this.approvals.notifyOwner(
+        ownerId,
+        `Ready for review · ${updated.title}`,
+        input.summary.slice(0, 200),
+      );
+    }
+    return { blocked: false as const, mission: updated };
+  }
+
   async completeMission(
     ownerId: string,
     id: string,
@@ -1124,14 +1482,68 @@ export class WorkerService {
       summary: string;
       markers?: Record<string, string | number | boolean | null>;
       notify?: boolean;
+      owner_release_authorized?: boolean;
     },
   ) {
     this.assertOwner(ownerId);
+    const m = this.getMission(ownerId, id);
+    const gate = assertCanComplete(m, this.missionJobsMap(m), {
+      ownerReleaseAuthorized: input.owner_release_authorized === true,
+    });
+    if (!gate.ok) {
+      const blocked = this.missions.update(ownerId, id, {
+        status: "blocked",
+        markers: {
+          block_reason: `${gate.code}: ${gate.message}`,
+        },
+      });
+      return { blocked: true as const, gate, mission: blocked };
+    }
+    const contract = contractFromMission(m);
+    const policyMode =
+      contract?.deployment_policy?.mode ?? "owner_release_required";
+    const gitHead = resolveGitHead(this.resolveMissionWorkPath(m));
+    const deployMarkers = deploymentRecordMarkers({
+      kind:
+        policyMode === "staging_only"
+          ? "staging"
+          : policyMode === "no_production"
+            ? "none"
+            : "owner_release",
+      recordedAt: new Date().toISOString(),
+      gitHead,
+      policyMode,
+    });
     const updated = this.missions.update(ownerId, id, {
       status: "done",
       summary: input.summary,
-      markers: input.markers,
+      markers: {
+        ...deployMarkers,
+        ...input.markers,
+        review_state: null,
+        project_active: false,
+        queue_capacity_released: true,
+        supervision_state: null,
+        current_step_id: null,
+        supervision_next_run_at: null,
+        supervision_wait_reason: null,
+      },
     });
+    const queueEntry = this.missionQueue.getByMissionId(ownerId, id);
+    if (
+      queueEntry &&
+      queueEntry.queue_state !== "completed" &&
+      queueEntry.queue_state !== "cancelled"
+    ) {
+      this.missionQueue.update(ownerId, queueEntry.id, {
+        queue_state: "completed",
+        claim_token: null,
+        claimed_at: null,
+        lease_until: null,
+        blocker_code: null,
+        blocker_detail: null,
+      });
+    }
     if (input.notify !== false) {
       await this.approvals.notifyOwner(
         ownerId,
@@ -1139,7 +1551,7 @@ export class WorkerService {
         input.summary.slice(0, 200),
       );
     }
-    return updated;
+    return { blocked: false as const, mission: updated };
   }
 
   async requestLocalApproval(input: {
@@ -1222,7 +1634,7 @@ export class WorkerService {
 
   /**
    * Discovery for ChatGPT: workspaces under allowed_roots + optional named aliases.
-   * Paths are returned so you can direct local coding agents to real workspaces.
+   * Paths are returned so you can direct Cursor/Kimi — they already have git access there.
    */
   listProjects(ownerId: string) {
     this.assertOwner(ownerId);
@@ -1243,7 +1655,7 @@ export class WorkerService {
       name: h.name,
       kind: "workspace" as const,
       description: `Under ${h.root}`,
-      allowed_agents: (["cursor", "kimi", "codex"] as AgentKind[]).filter((a) =>
+      allowed_agents: (["cursor", "codex"] as AgentKind[]).filter((a) =>
         isAgentEnabled(this.config, a),
       ),
       workspace: h.name,
@@ -1259,7 +1671,7 @@ export class WorkerService {
       aliases,
       clients: this.clientDefs(),
       note:
-        "Pass workspace (folder name or path under allowed_roots) with agent cursor|kimi|codex. Client bugfixes: ingest_client_request → run_next_bugfix (Kimi, paced for 5h window). Research tiers use read-only modes where supported.",
+        "Pass workspace with agent codex|cursor. Kimi is retired for new work. Client bugfixes: ingest_client_request → run_next_bugfix (Codex). Research: start_task tier=research (conservation may route to Cursor ask mode).",
       terminal_sessions:
         "Interactive PTYs outlive chat turns while the worker process is up; worker restart ends them. Workspace sets cwd only — not an OS sandbox.",
     };
@@ -1270,112 +1682,109 @@ export class WorkerService {
     return this.store.listRecent(ownerId, limit).map((j) => this.toView(j));
   }
 
-  private missionContextPacket(mission: MissionRecord): string {
-    const handoff = mission.handoff
-      ? `${mission.handoff.agent} job ${mission.handoff.job_id} ended ${mission.handoff.status}: ${mission.handoff.summary ?? "no summary"}`
-      : "none";
-    return [
-      "[Ground Control mission packet]",
-      `Mission: ${mission.id}`,
-      `Goal: ${mission.goal}`,
-      `Workspace: ${mission.workspace ?? "unspecified"}`,
-      `Plan revision: ${mission.plan_revision}`,
-      `Approved revision: ${mission.approved_revision ?? "none"}`,
-      `Approved scope: ${String(mission.markers.approved_scope ?? "none")}`,
-      "Approved plan:",
-      mission.plan ?? "none",
-      "Relevant findings:",
-      mission.findings ?? "none",
-      `Previous handoff: ${handoff}`,
-      "Stay within the approved plan and scope. Record blockers instead of broadening scope.",
-      "[End mission packet]",
-    ].join("\n");
-  }
-
   startTask(input: StartTaskInput): TaskView {
     this.assertOwner(input.ownerId);
 
-    if (!isAgentEnabled(this.config, input.agent)) {
-      throw new AuthError(`agent not enabled: ${input.agent}`);
+    try {
+      assertAgentAllowedForNewWork(this.config, input.agent);
+    } catch (err) {
+      throw new AuthError(err instanceof Error ? err.message : String(err));
     }
 
     const tier = (input.tier ?? "default") as string;
     const mutatingTier = tier !== "research" && tier !== "triage";
-    let mission: MissionRecord | null = null;
-    if (input.missionId) {
-      mission = this.getMission(input.ownerId, input.missionId);
-    }
+    const mission = input.missionId
+      ? this.getMission(input.ownerId, input.missionId)
+      : null;
     if (this.advisorEnabled && mutatingTier) {
       if (!mission) {
-        throw new AuthError(
-          "Advisor: implementation requires mission_id with an approved plan",
-        );
+        throw new AuthError("Advisor: implementation requires mission_id with an approved plan");
       }
       if (!missionRoutineScopeApproved(mission)) {
-        throw new AuthError(
-          `Advisor: mission plan revision ${mission.plan_revision} is not approved`,
-        );
+        throw new AuthError(`Advisor: mission plan revision ${mission.plan_revision} is not approved`);
       }
     }
-    let resolvedModel: string | null = input.model ?? null;
-    let cursorMode: "ask" | "plan" | null = null;
+    const conservation = buildConservationPlan({
+      config: this.config,
+      tier: input.tier,
+      explicitAgent: input.agent,
+      explicitModel: input.model,
+      ownerOverride: input.conservation_override ?? null,
+    });
+    const effectiveAgent = conservation.agent;
+    if (!isAgentEnabled(this.config, effectiveAgent)) {
+      throw new AuthError(`agent not enabled: ${effectiveAgent}`);
+    }
 
-    if (
-      input.agent === "cursor" ||
-      input.agent === "kimi" ||
-      input.agent === "codex"
-    ) {
-      const policy = this.usagePolicy(input.agent);
-      resolvedModel = resolveModelForTier(policy, tier, input.model);
-      if (
-        input.agent === "cursor" &&
-        (tier === "research" || tier === "triage") &&
-        policy.research_mode
-      ) {
-        cursorMode = policy.research_mode;
+    let resolvedModel: string | null = conservation.model;
+    let cursorMode: "ask" | "plan" | null = conservation.cursor_mode;
+    let reasoningEffort = conservation.reasoning_effort;
+
+    if (isHostManagedAgent(effectiveAgent)) {
+      const usageAgent = effectiveAgent as UsageAgent;
+      const policy = this.usagePolicy(usageAgent);
+      if (!input.conservation_override?.model) {
+        resolvedModel =
+          resolvedModel ??
+          resolveModelForTier(policy, tier, input.model);
       }
-      if (!this.advisorEnabled) {
-        const agentInFlight = this.store
-          .listRecent(input.ownerId, 40)
-          .filter(
-            (j) =>
-              j.agent === input.agent &&
-              (j.status === "queued" ||
-                j.status === "preparing" ||
-                j.status === "running" ||
-                j.status === "awaiting_followup"),
-          ).length;
-        const budget = this.usage.checkBudget(
-          input.agent,
-          policy,
-          agentInFlight,
+      const agentInFlight = this.store
+        .listRecent(input.ownerId, 40)
+        .filter(
+          (j) =>
+            j.agent === effectiveAgent &&
+            (j.status === "queued" ||
+              j.status === "preparing" ||
+              j.status === "running" ||
+              j.status === "awaiting_followup"),
+        ).length;
+      const budget = this.usage.checkBudget(usageAgent, policy, agentInFlight);
+      // Advisor may durably queue approved mission work while capacity is
+      // occupied. launch() rechecks the same budget immediately before any
+      // executor starts, so this is not a bypass of launch-time limits.
+      if (!budget.allowed && !(this.advisorEnabled && mission)) {
+        this.usage.record({
+          agent: usageAgent,
+          kind: "blocked",
+          tier,
+          model: resolvedModel,
+          detail: budget.reason,
+        });
+        throw new AuthError(
+          `usage budget: ${budget.reason}` +
+            (budget.retry_after_sec
+              ? ` (retry_after_sec=${budget.retry_after_sec})`
+              : ""),
         );
-        if (!budget.allowed) {
-          this.usage.record({
-            agent: input.agent,
-            kind: "blocked",
-            tier,
-            model: resolvedModel,
-            detail: budget.reason,
-          });
+      }
+      if (input.idempotencyKey) {
+        const guardKey = `${effectiveAgent}:${input.idempotencyKey}`;
+        const prev = this.retryLoopGuard.get(guardKey);
+        const now = Date.now();
+        if (prev && now - prev.at < 120_000 && prev.count >= 3) {
           throw new AuthError(
-            `usage budget: ${budget.reason}` +
-              (budget.retry_after_sec
-                ? ` (retry_after_sec=${budget.retry_after_sec})`
-                : ""),
+            "conservation_blocked: retry loop detected for idempotency key (wait or escalate)",
           );
         }
+        this.retryLoopGuard.set(guardKey, {
+          count: (prev && now - prev.at < 120_000 ? prev.count : 0) + 1,
+          at: now,
+        });
       }
     }
 
     let projectId: string;
     let workPath: string | null = null;
     let timeoutSec =
-      input.timeoutSec ?? this.config.worker.default_timeout_sec;
+      input.timeoutSec ??
+      Math.min(
+        this.config.worker.default_timeout_sec,
+        conservation.limits.max_elapsed_sec,
+      );
 
-    if (input.agent === "mock" || input.projectId) {
+    if (effectiveAgent === "mock" || input.projectId) {
       if (!input.projectId) throw new AuthError("project_id required for mock/alias");
-      if (!isAgentAllowed(this.config, input.projectId, input.agent)) {
+      if (!isAgentAllowed(this.config, input.projectId, effectiveAgent)) {
         throw new AuthError("agent or project not permitted");
       }
       const project = getProject(this.config, input.projectId);
@@ -1383,9 +1792,9 @@ export class WorkerService {
       projectId = project.id;
       timeoutSec = Math.min(timeoutSec, project.permissions.max_runtime_sec);
     } else {
-      // Host coding-agent mode — workspace required, no project registry.
+      // cursor / codex host mode — workspace required, no project registry
       if (!input.workspace) {
-        throw new AuthError("workspace is required for cursor/kimi/codex");
+        throw new AuthError("workspace is required for cursor/codex");
       }
       try {
         workPath = resolveWorkspacePath(
@@ -1399,19 +1808,6 @@ export class WorkerService {
         );
       }
       projectId = workspaceLabel(workPath);
-
-      if (mission?.workspace) {
-        const missionPath = resolveWorkspacePath(
-          mission.workspace,
-          this.config.worker.allowed_roots,
-          this.configRoot,
-        );
-        if (missionPath !== workPath) {
-          throw new AuthError(
-            "Advisor: task workspace does not match the approved mission workspace",
-          );
-        }
-      }
 
       // Serialize concurrent host jobs on the same live workspace
       const active = this.store
@@ -1433,11 +1829,7 @@ export class WorkerService {
             j.status === "preparing" ||
             j.status === "queued",
         );
-        if (
-          blockers.length > 0 &&
-          !input.idempotencyKey &&
-          !(this.advisorEnabled && mission)
-        ) {
+        if (blockers.length > 0 && !input.idempotencyKey && !(this.advisorEnabled && mission)) {
           throw new AuthError(
             `workspace busy with job ${blockers[0]!.id} (${blockers[0]!.status}); check in with get_task or send_followup`,
           );
@@ -1445,40 +1837,66 @@ export class WorkerService {
       }
     }
 
-    const prompt = mission
-      ? `${this.missionContextPacket(mission)}\n\nTask request:\n${input.prompt}`
+    const missionPacket = mission
+      ? [
+          "[Ground Control mission packet]",
+          `Mission: ${mission.id}`,
+          `Goal: ${mission.goal}`,
+          `Workspace: ${mission.workspace ?? "unresolved"}`,
+          `Plan revision: ${mission.plan_revision}; approved revision: ${mission.approved_revision ?? "none"}`,
+          `Approved scope: ${mission.plan ?? ""}`,
+          `Current step: ${String(mission.markers.current_step_id ?? "unassigned")}`,
+          `Definition of done: ${String(mission.markers.definition_of_done ?? "see approved plan")}`,
+          `Findings: ${mission.findings ?? "none"}`,
+          `Latest handoff: ${mission.handoff ? JSON.stringify(mission.handoff) : mission.summary ?? "none"}`,
+          `Linked jobs: ${mission.linked_job_ids.join(", ") || "none"}`,
+          `Evidence: ${String(mission.markers.evidence_git_head ?? "none")}`,
+          "[End Ground Control mission packet]",
+        ].join("\n")
+      : "";
+    // Put authority ahead of task prose; only the latter may be truncated.
+    const availablePrompt = Math.max(0, conservation.limits.max_context_chars - missionPacket.length - (missionPacket ? 2 : 0));
+    const taskPrompt = input.prompt.length > availablePrompt
+      ? `${input.prompt.slice(0, availablePrompt)}\n\n[truncated by conservation max_context_chars]`
       : input.prompt;
+    const boundedPrompt = missionPacket ? `${missionPacket}\n\n${taskPrompt}` : taskPrompt;
+
+    const conservationMeta = conservationPlanToMeta({
+      ...conservation,
+      model: resolvedModel,
+      tokens_budget: conservation.limits.max_output_chars,
+    });
+
     const job = this.store.createJob({
       ...input,
-      prompt,
+      agent: effectiveAgent,
+      prompt: boundedPrompt,
       projectId,
       workPath,
       timeoutSec,
       resolvedModel,
       cursorMode,
     });
-    if (
-      input.agent === "cursor" ||
-      input.agent === "kimi" ||
-      input.agent === "codex"
-    ) {
+    this.store.updateJob(job.id, { execution_meta: conservationMeta });
+    if (mission) this.missions.update(input.ownerId, mission.id, { linkJobId: job.id });
+
+    if (isHostManagedAgent(effectiveAgent)) {
       this.jobMeta.set(job.id, {
         tier,
         model: resolvedModel,
         cursorMode,
+        reasoningEffort,
+        conservationMeta,
       });
       if (!this.advisorEnabled) {
-        this.usage.record({
-          agent: input.agent,
-          kind: "start",
-          jobId: job.id,
-          tier,
-          model: resolvedModel,
-        });
+      this.usage.record({
+        agent: effectiveAgent as UsageAgent,
+        kind: "start",
+        jobId: job.id,
+        tier,
+        model: resolvedModel,
+      });
       }
-    }
-    if (mission) {
-      this.missions.update(input.ownerId, mission.id, { linkJobId: job.id });
     }
     if (this.running) void this.tick();
     return this.toView(job);
@@ -1553,12 +1971,16 @@ export class WorkerService {
     const active = this.active.get(jobId);
     if (active) {
       void active.handle.cancel("SIGTERM");
-    } else if (job.status === "queued" || job.status === "awaiting_followup") {
-      this.store.updateJob(jobId, {
-        status: "cancelled",
-        finished_at: new Date().toISOString(),
-        summary: "cancelled before start",
-      });
+    } else {
+      const pid = parseHostProcessGroupPid(job.container_id);
+      if (pid) killProcessGroup(pid, "SIGTERM");
+      else if (job.status === "queued" || job.status === "awaiting_followup") {
+        this.store.updateJob(jobId, {
+          status: "cancelled",
+          finished_at: new Date().toISOString(),
+          summary: "cancelled before start",
+        });
+      }
     }
     return this.toView(this.store.getJob(jobId)!);
   }
@@ -1588,6 +2010,7 @@ export class WorkerService {
       started_at: job.started_at,
       finished_at: job.finished_at,
       followups_queued: this.store.countFollowups(job.id, "queued"),
+      conservation: parseConservationMeta(job.execution_meta ?? null),
     };
   }
 
@@ -1604,6 +2027,7 @@ export class WorkerService {
         if (this.active.has(job.id)) continue;
         await this.launch(job.id);
       }
+      await missionQueueTick(this);
     } finally {
       this.ticking = false;
     }
@@ -1612,70 +2036,29 @@ export class WorkerService {
   private async launch(jobId: string): Promise<void> {
     const job = this.store.getJob(jobId);
     if (!job || job.status !== "queued") return;
-
     if (this.advisorEnabled) {
-      if (
-        job.work_path &&
-        this.store
-          .listActiveForWorkPath(job.work_path)
-          .some(
-            (candidate) =>
-              candidate.id !== job.id && candidate.status !== "queued",
-          )
-      ) {
-        return;
-      }
-      let mission: MissionRecord | null = null;
       if (job.mission_id) {
-        mission = this.missions.get(job.owner_id, job.mission_id);
-        const researchTier = job.tier === "research" || job.tier === "triage";
-        if (!mission || (!researchTier && !missionRoutineScopeApproved(mission))) {
-          return;
-        }
+        const mission = this.missions.get(job.owner_id, job.mission_id);
+        const readOnly = job.tier === "research" || job.tier === "triage";
+        if (!mission || ["blocked", "cancelled", "done", "ready_for_review"].includes(mission.status) ||
+          ["paused", "blocked"].includes(String(mission.markers.supervision_state)) ||
+          (!readOnly && !missionRoutineScopeApproved(mission))) return;
       }
-      if (
-        job.agent === "cursor" ||
-        job.agent === "kimi" ||
-        job.agent === "codex"
-      ) {
-        const inFlight = this.store
-          .listRecent(job.owner_id, 100)
-          .filter(
-            (candidate) =>
-              candidate.id !== job.id &&
-              candidate.agent === job.agent &&
-              (candidate.status === "preparing" ||
-                candidate.status === "running" ||
-                candidate.status === "awaiting_followup"),
-          ).length;
-        const budget = this.usage.checkBudget(
-          job.agent,
-          this.usagePolicy(job.agent),
-          inFlight,
-        );
-        if (!budget.allowed) return;
-        this.usage.record({
-          agent: job.agent,
-          kind: "start",
-          jobId: job.id,
-          tier: job.tier,
-          model: job.model,
-        });
-      }
-      if (mission) {
-        if (
-          (job.tier === "research" || job.tier === "triage") &&
-          mission.status === "intake"
-        ) {
-          this.missions.update(job.owner_id, mission.id, {
-            status: "researching",
-          });
-        } else if (mission.status === "approved") {
-          this.missions.update(job.owner_id, mission.id, {
-            status: "implementing",
-          });
-        }
-      }
+      if (job.work_path && this.store.listActiveForWorkPath(job.work_path).some(
+        (candidate) => candidate.id !== job.id && candidate.status !== "queued",
+      )) return;
+    }
+    // Recheck at the execution boundary. Queued Advisor work is intentionally
+    // admitted FIFO, but it must never start beyond model/concurrency budget.
+    if (this.advisorEnabled && isHostManagedAgent(job.agent)) {
+      const usageAgent = job.agent as UsageAgent;
+      const policy = this.usagePolicy(usageAgent);
+      const activeForAgent = this.store.listRecent(job.owner_id, 100).filter(
+        (candidate) => candidate.id !== job.id && candidate.agent === job.agent &&
+          (candidate.status === "preparing" || candidate.status === "running" || candidate.status === "awaiting_followup"),
+      ).length;
+      if (!this.usage.checkBudget(usageAgent, policy, activeForAgent).allowed) return;
+      this.usage.record({agent: usageAgent, kind: "start", jobId: job.id, tier: job.tier, model: job.model});
     }
 
     this.store.updateJob(jobId, {
@@ -1690,9 +2073,7 @@ export class WorkerService {
       let sourcePath = workPath ?? "";
 
       const useHost =
-        (job.agent === "cursor" ||
-          job.agent === "kimi" ||
-          job.agent === "codex") &&
+        isHostManagedAgent(job.agent) &&
         this.config.worker.agent_execution === "host";
 
       if (useHost) {
@@ -1726,16 +2107,11 @@ export class WorkerService {
       const adapter = getAdapter(job.agent as AgentKind);
       const project = getProject(this.config, job.project_id);
       let binary = agentCfg?.binary;
-      if (
-        useHost &&
-        (job.agent === "cursor" ||
-          job.agent === "kimi" ||
-          job.agent === "codex")
-      ) {
+      if (useHost && isHostManagedAgent(job.agent)) {
         try {
           binary = resolveExecutable(
             agentCfg?.binary,
-            job.agent === "cursor" ? "agent" : job.agent,
+            hostBinaryFallback(job.agent),
           ).path;
         } catch (err) {
           throw new Error(
@@ -1761,6 +2137,7 @@ export class WorkerService {
         model: job.model ?? meta?.model,
         tier: job.tier ?? meta?.tier,
         cursorMode: job.cursor_mode ?? meta?.cursorMode,
+        reasoningEffort: meta?.reasoningEffort ?? parseConservationMeta(job.execution_meta ?? null)?.reasoning_effort,
       });
 
       const onOutput = (chunk: { stdout?: string; stderr?: string }) => {
@@ -1799,33 +2176,19 @@ export class WorkerService {
         this.finishJob(jobId, plan, result, mode, sourcePath);
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      if (this.advisorEnabled && job.mission_id) {
+        this.missions.update(job.owner_id, job.mission_id, {
+          status: "blocked",
+          handoff: { job_id: job.id, agent: job.agent, status: "failed", summary: null, recorded_at: new Date().toISOString() },
+          markers: { block_reason: err instanceof Error ? err.message : String(err) },
+        });
+      }
       this.store.updateJob(jobId, {
         status: "failed",
-        error: message,
+        error: err instanceof Error ? err.message : String(err),
         finished_at: new Date().toISOString(),
       });
       this.active.delete(jobId);
-      if (job.mission_id) {
-        const mission = this.missions.get(job.owner_id, job.mission_id);
-        if (mission) {
-          this.missions.update(job.owner_id, mission.id, {
-            status: "blocked",
-            handoff: {
-              job_id: job.id,
-              agent: job.agent,
-              status: "failed",
-              summary: message,
-              recorded_at: new Date().toISOString(),
-            },
-          });
-          void this.approvals.notifyOwner(
-            job.owner_id,
-            `Mission blocked · ${mission.title}`,
-            `${job.agent} could not start. Review the handoff before retrying or switching agents.`,
-          );
-        }
-      }
     }
   }
 
@@ -1875,36 +2238,44 @@ export class WorkerService {
       error = `exit code ${result.exitCode}`;
     }
 
-    const combinedOut = `${result.stdout}\n${result.stderr}`;
-    if (
-      (job.agent === "cursor" ||
-        job.agent === "kimi" ||
-        job.agent === "codex") &&
-      looksLikeRateLimit(combinedOut)
-    ) {
+    const hostAgent = isHostManagedAgent(job.agent);
+    if (hostAgent && isProviderRateLimitFailure({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr })) {
       status = "failed";
       error = "rate_limited";
       this.usage.record({
-        agent: job.agent,
+        agent: job.agent as UsageAgent,
         kind: "rate_limited",
         jobId,
-        tier: job.tier,
-        model: job.model,
-        detail: combinedOut.slice(-500),
+        tier: this.jobMeta.get(jobId)?.tier,
+        model: this.jobMeta.get(jobId)?.model,
+        detail: result.stderr.slice(-500),
       });
-    } else if (
-      job.agent === "cursor" ||
-      job.agent === "kimi" ||
-      job.agent === "codex"
-    ) {
+    } else if (hostAgent) {
       this.usage.record({
-        agent: job.agent,
+        agent: job.agent as UsageAgent,
         kind: "finish",
         jobId,
-        tier: job.tier,
-        model: job.model,
+        tier: this.jobMeta.get(jobId)?.tier,
+        model: this.jobMeta.get(jobId)?.model,
         detail: status,
       });
+    }
+
+    let executionMeta = job.execution_meta ?? null;
+    if (job.agent === "codex") {
+      const metrics = parseCodexUsageFromJsonl(result.stdout);
+      const parsed = parseConservationMeta(executionMeta);
+      if (parsed) {
+        const used =
+          metrics.input_tokens != null || metrics.output_tokens != null
+            ? (metrics.input_tokens ?? 0) + (metrics.output_tokens ?? 0)
+            : null;
+        executionMeta = conservationPlanToMeta({
+          ...parsed,
+          tokens_used: used,
+          budget_label: metrics.label,
+        });
+      }
     }
 
     this.store.updateJob(jobId, {
@@ -1915,40 +2286,17 @@ export class WorkerService {
       session_id: sessionId,
       finished_at: new Date().toISOString(),
       container_id: null,
+      execution_meta: executionMeta,
     });
 
     this.active.delete(jobId);
     this.jobMeta.delete(jobId);
 
-    if (job.mission_id) {
-      try {
-        const mission = this.missions.get(job.owner_id, job.mission_id);
-        if (mission) {
-          this.missions.update(job.owner_id, mission.id, {
-            status: status === "succeeded" ? "verifying" : "blocked",
-            handoff: {
-              job_id: job.id,
-              agent: job.agent,
-              status,
-              summary,
-              recorded_at: new Date().toISOString(),
-            },
-          });
-          if (status !== "succeeded") {
-            void this.approvals.notifyOwner(
-              job.owner_id,
-              `Mission blocked · ${mission.title}`,
-              `${job.agent} ended ${status}. Review the handoff before retrying or switching agents.`,
-            );
-          }
-        }
-      } catch {
-        // Mission handoff is best-effort; job state remains authoritative.
-      }
-    }
-
     // Auto-complete client bugfix requests linked to this job
-    if (job.agent === "kimi" && (status === "succeeded" || status === "failed")) {
+    if (
+      (job.agent === "codex" || job.agent === "kimi") &&
+      (status === "succeeded" || status === "failed")
+    ) {
       try {
         const linked = this.clientRequests
           .list(job.owner_id, { status: "in_progress", limit: 40 })
@@ -1958,7 +2306,7 @@ export class WorkerService {
             status: status === "succeeded" ? "done" : "queued",
             fixSummary:
               status === "succeeded"
-                ? (summary ?? "kimi finished").slice(0, 2000)
+                ? (summary ?? `${job.agent} finished`).slice(0, 2000)
                 : null,
           });
           if (linked.mission_id && status === "succeeded") {
@@ -2001,7 +2349,246 @@ export class WorkerService {
         // best-effort
       }
     }
-    void this.tick();
+
+    missionSupervisorOnJobFinished(this, jobId, status);
+    if (this.advisorEnabled && job.mission_id) {
+      const mission = this.missions.get(job.owner_id, job.mission_id);
+      if (mission) {
+        this.missions.update(job.owner_id, mission.id, {
+          ...(missionRoutineScopeApproved(mission) && !["paused", "blocked"].includes(String(mission.markers.supervision_state)) ? {
+            status: status === "succeeded" ? "verifying" as const : "blocked" as const,
+            markers: status === "succeeded" ? {} : { block_reason: error ?? "agent failed" },
+          } : {}),
+          handoff: { job_id: job.id, agent: job.agent, status, summary, recorded_at: new Date().toISOString() },
+        });
+      }
+    }
+    const missionForJob = this.missions
+      .list(job.owner_id, { limit: 50 })
+      .find((m) => m.linked_job_ids.includes(jobId));
+    if (missionForJob) {
+      missionQueueOnJobFinished(this, missionForJob.id);
+    }
+    if (this.running) void this.tick();
+  }
+
+  private listMissionQueueBoard(ownerId: string) {
+    const entries = this.missionQueue.list(ownerId, { limit: 40 });
+    return entries.map((e) => {
+      const m = this.missions.get(ownerId, e.mission_id);
+      const presentation = m
+        ? deriveMissionDeliveryPresentation(
+            m,
+            { queue_state: e.queue_state },
+            missionHasActiveSupervisorJob(m, this.store),
+          )
+        : null;
+      return {
+        ...e,
+        mission_title: m?.title ?? null,
+        mission_status: m?.status ?? null,
+        display_state: presentation?.display_state ?? null,
+        display_state_label: presentation?.display_state_label ?? null,
+        why: e.blocker_detail ?? presentation?.blocker ?? null,
+        next_run_at: e.next_run_at,
+      };
+    });
+  }
+
+  enqueueMissionProject(
+    ownerId: string,
+    input: {
+      missionId: string;
+      enqueueKey: string;
+      priority?: number;
+      dependsOn?: string[];
+      earliestStartAt?: string | null;
+      scheduleUntilAt?: string | null;
+      resourceClass?: string;
+      maxRetries?: number;
+      backoffSec?: number;
+    },
+  ) {
+    this.assertOwner(ownerId);
+    const m = this.getMission(ownerId, input.missionId);
+    if (!contractFromMission(m)) {
+      throw new AuthError(
+        "mission needs mission_contract_json before enqueue — approve_mission with contract markers",
+      );
+    }
+    const okStatus =
+      m.status === "approved" ||
+      m.status === "implementing" ||
+      m.status === "verifying" ||
+      m.status === "plan_ready";
+    if (!okStatus) {
+      throw new AuthError(
+        `mission status ${m.status} cannot be enqueued — approve plan first`,
+      );
+    }
+    const entry = this.missionQueue.enqueue({
+      ownerId,
+      missionId: input.missionId,
+      enqueueKey: input.enqueueKey,
+      priority: input.priority,
+      dependsOn: input.dependsOn,
+      earliestStartAt: input.earliestStartAt,
+      scheduleUntilAt: input.scheduleUntilAt,
+      resourceClass: input.resourceClass,
+      maxRetries: input.maxRetries,
+      backoffSec: input.backoffSec,
+    });
+    this.missions.update(ownerId, input.missionId, {
+      markers: {
+        queue_entry_id: entry.id,
+        queue_enqueue_key: entry.enqueue_key,
+        queue_state: entry.queue_state,
+      },
+    });
+    return entry;
+  }
+
+  listMissionQueue(
+    ownerId: string,
+    opts?: { states?: MissionQueueState[]; limit?: number },
+  ) {
+    this.assertOwner(ownerId);
+    return this.missionQueue.list(ownerId, opts);
+  }
+
+  getMissionQueueEntry(ownerId: string, entryId: string) {
+    this.assertOwner(ownerId);
+    const e = this.missionQueue.get(ownerId, entryId);
+    if (!e) throw new AuthError(`mission queue entry not found: ${entryId}`);
+    return e;
+  }
+
+  updateMissionQueueEntry(
+    ownerId: string,
+    entryId: string,
+    patch: {
+      priority?: number;
+      dependsOn?: string[];
+      earliestStartAt?: string | null;
+      scheduleUntilAt?: string | null;
+      resourceClass?: string;
+      maxRetries?: number;
+      backoffSec?: number;
+    },
+  ) {
+    this.assertOwner(ownerId);
+    return this.missionQueue.update(ownerId, entryId, {
+      priority: patch.priority,
+      depends_on: patch.dependsOn,
+      earliest_start_at: patch.earliestStartAt,
+      schedule_until_at: patch.scheduleUntilAt,
+      resource_class: patch.resourceClass,
+      max_retries: patch.maxRetries,
+      backoff_sec: patch.backoffSec,
+    });
+  }
+
+  cancelMissionQueueEntry(ownerId: string, entryId: string, reason?: string) {
+    this.assertOwner(ownerId);
+    const entry = this.getMissionQueueEntry(ownerId, entryId);
+    return this.cancelMissionProject(ownerId, entry.mission_id, reason);
+  }
+
+  cancelMissionProject(ownerId: string, missionId: string, reason?: string) {
+    this.assertOwner(ownerId);
+    const m = this.getMission(ownerId, missionId);
+    if (m.status === "cancelled") {
+      const entry = this.missionQueue.getByMissionId(ownerId, missionId);
+      return { mission: m, queue_entry: entry };
+    }
+    if (m.status === "done") {
+      const queueEntry = this.missionQueue.getByMissionId(ownerId, missionId);
+      if (
+        queueEntry &&
+        queueEntry.queue_state !== "completed" &&
+        queueEntry.queue_state !== "cancelled"
+      ) {
+        const reconciled = this.missionQueue.update(ownerId, queueEntry.id, {
+          queue_state: "completed",
+          claim_token: null,
+          claimed_at: null,
+          lease_until: null,
+          blocker_code: null,
+          blocker_detail: null,
+        });
+        return { mission: m, queue_entry: reconciled };
+      }
+      return { mission: m, queue_entry: queueEntry };
+    }
+
+    const contract = contractFromMission(m);
+    const cancelJobs = contract?.cleanup?.cancel_active_jobs !== false;
+    if (cancelJobs) {
+      for (const jobId of m.linked_job_ids) {
+        const job = this.store.getJob(jobId);
+        if (job && !isTerminal(job.status)) {
+          this.cancelTask(ownerId, jobId);
+        }
+      }
+    }
+
+    let queueEntry = this.missionQueue.getByMissionId(ownerId, missionId);
+    const releaseLease = contract?.cleanup?.release_queue_lease !== false;
+    if (
+      releaseLease &&
+      queueEntry &&
+      queueEntry.queue_state !== "cancelled" &&
+      queueEntry.queue_state !== "completed"
+    ) {
+      if (queueEntry.queue_state === "running" || queueEntry.claim_token) {
+        queueEntry = this.missionQueue.releaseClaim(ownerId, queueEntry.id, {
+          queue_state: "cancelled",
+          blocker_code: "cancelled",
+          blocker_detail: reason ?? "project cancelled",
+        });
+      } else {
+        queueEntry = this.missionQueue.cancel(ownerId, queueEntry.id, reason);
+      }
+    }
+
+    const updated = this.missions.update(ownerId, missionId, {
+      status: "cancelled",
+      markers: {
+        project_active: false,
+        supervision_state: null,
+        current_step_id: null,
+        supervision_next_run_at: null,
+        supervision_wait_reason: null,
+        block_reason: null,
+        queue_state: "cancelled",
+        queue_capacity_released: true,
+        cancel_reason: reason ?? null,
+      },
+    });
+    return { mission: updated, queue_entry: queueEntry };
+  }
+
+  rescheduleMissionQueueEntry(
+    ownerId: string,
+    entryId: string,
+    input: {
+      earliestStartAt?: string | null;
+      scheduleUntilAt?: string | null;
+      nextRunAt?: string | null;
+      priority?: number;
+    },
+  ) {
+    this.assertOwner(ownerId);
+    const entry = this.missionQueue.update(ownerId, entryId, {
+      earliest_start_at: input.earliestStartAt,
+      schedule_until_at: input.scheduleUntilAt,
+      next_run_at: input.nextRunAt,
+      priority: input.priority,
+      queue_state: "scheduled",
+      blocker_code: null,
+      blocker_detail: null,
+    });
+    return entry;
   }
 }
 

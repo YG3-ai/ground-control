@@ -10,7 +10,7 @@ import {
 } from "./board-brain-corpus.js";
 
 const SAMPLE_STATS = `{
-  "vault": "/Users/partha/second-brain/vault",
+  "vault": "/Users/YOU/second-brain/vault",
   "notes": 2294,
   "words": 4948877
 }`;

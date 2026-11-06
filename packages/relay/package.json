@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
-    "build": "node scripts/verify-board-shell.mjs && tsc -p tsconfig.json && cp src/board.html dist/board.html && node scripts/verify-board-shell.mjs dist/board.html && cp src/manifest.webmanifest dist/manifest.webmanifest && cp src/apple-touch-icon.png dist/apple-touch-icon.png && mkdir -p dist/assets/life-mirror && cp src/assets/life-mirror/*.webp dist/assets/life-mirror/ && (cp src/assets/life-mirror/world-live*.mp4 dist/assets/life-mirror/ || true) && (cp src/assets/life-mirror/brain-core-stock.mp4 dist/assets/life-mirror/ || true) && cp src/assets/life-mirror/brain-core-stock-poster.webp dist/assets/life-mirror/",
+    "build": "python3 scripts/generate-pwa-icons.py && node scripts/verify-board-shell.mjs && tsc -p tsconfig.json && cp src/board.html dist/board.html && node scripts/verify-board-shell.mjs dist/board.html && cp -R src/icons dist/icons && cp src/manifest.webmanifest dist/manifest.webmanifest && mkdir -p dist/assets/life-mirror && cp src/assets/life-mirror/*.webp dist/assets/life-mirror/ && (cp src/assets/life-mirror/world-live*.mp4 dist/assets/life-mirror/ || true) && (cp src/assets/life-mirror/brain-core-stock.mp4 dist/assets/life-mirror/ || true) && cp src/assets/life-mirror/brain-core-stock-poster.webp dist/assets/life-mirror/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node --import tsx src/cli.ts",
     "test": "vitest run"
