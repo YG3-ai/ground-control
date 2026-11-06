@@ -206,12 +206,15 @@ describe.skipIf(!dockerAvailable())("relay + worker e2e (authenticated)", () => 
     expect(manifest.headers.get("content-type")).toContain("manifest+json");
     const m = (await manifest.json()) as {
       name?: string;
-      icons?: unknown[];
+      icons?: { src: string; sizes: string; purpose?: string }[];
       start_url?: string;
     };
     expect(m.name).toBe("Ground Control");
     expect(m.start_url).toBe("/");
-    expect(Array.isArray(m.icons) && m.icons.length).toBeTruthy();
+    expect(Array.isArray(m.icons) && m.icons.length).toBeGreaterThanOrEqual(3);
+    const sizes = new Set(m.icons?.map((i) => i.sizes) ?? []);
+    expect(sizes.has("192x192")).toBe(true);
+    expect(sizes.has("512x512")).toBe(true);
 
     const icon = await fetch(`http://127.0.0.1:${port}/apple-touch-icon.png`);
     expect(icon.status).toBe(200);
@@ -220,10 +223,15 @@ describe.skipIf(!dockerAvailable())("relay + worker e2e (authenticated)", () => 
     expect(buf.length).toBeGreaterThan(100);
     expect(buf.subarray(0, 4).toString("hex")).toBe("89504e47");
 
+    const favicon = await fetch(`http://127.0.0.1:${port}/favicon.ico`);
+    expect(favicon.status).toBe(200);
+
     const page = await fetch(`http://127.0.0.1:${port}/board`);
     const html = await page.text();
     expect(html).toContain('rel="manifest"');
     expect(html).toContain('rel="apple-touch-icon"');
+    expect(html).toMatch(/\/icons\/[a-f0-9]+\/icon-180\.png/);
+    expect(html).not.toContain("__GROUND_ICON_SET__");
     expect(html).toMatch(/Needs you/);
     expect(html).toMatch(/No decisions waiting/);
     expect(html).toMatch(/Completed/);

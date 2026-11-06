@@ -1,8 +1,30 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { WorkerHub } from "../worker-hub.js";
+import {
+  getMacConnectivity,
+  recoverMacServices,
+  type ServiceRecoveryContext,
+} from "../service-recovery.js";
 
-const AgentSchema = z.enum(["mock", "cursor", "kimi", "codex"]);
+const AgentSchema = z.enum(["mock", "cursor", "codex", "kimi"]);
+const ConservationOverrideSchema = z
+  .object({
+    agent: z.enum(["codex", "cursor"]).optional(),
+    model: z.string().max(200).optional(),
+    reasoning_effort: z.enum(["minimal", "low", "medium", "high"]).optional(),
+    task_class: z
+      .enum([
+        "lookup_triage",
+        "research",
+        "implementation",
+        "verification",
+        "high_risk",
+      ])
+      .optional(),
+    note: z.string().max(500).optional(),
+  })
+  .optional();
 
 function textResult(data: unknown) {
   return {
@@ -11,17 +33,71 @@ function textResult(data: unknown) {
 }
 
 /**
- * ChatGPT coordination surface for local Cursor + Kimi.
+ * ChatGPT coordination surface for local Codex + Cursor (Kimi retired for new work).
  * Direct workspaces those tools already have git access to — no per-repo wiring.
  */
+export type RegisterToolsOptions = {
+  repoRoot: string;
+  relayPort: number;
+  publicBaseUrl: string;
+  workerLocalControlPort?: number;
+};
+
 export function registerTools(
   server: McpServer,
   hub: WorkerHub,
   defaultOwnerId: string,
+  recovery?: RegisterToolsOptions,
 ): void {
+  const recoveryCtx: ServiceRecoveryContext | undefined = recovery
+    ? {
+        repoRoot: recovery.repoRoot,
+        relayPort: recovery.relayPort,
+        publicBaseUrl: recovery.publicBaseUrl,
+        ownerId: defaultOwnerId,
+        workerLocalControlPort: recovery.workerLocalControlPort,
+        hub,
+      }
+    : undefined;
+
+  if (recoveryCtx) {
+    server.tool(
+      "get_mac_connectivity",
+      "Relay-side health (no worker required): WebSocket link, local /healthz, LaunchAgent states. Call when tools fail with 'Mac worker is not connected' or before recover_mac_services.",
+      {},
+      { readOnlyHint: true },
+      async () => textResult(await getMacConnectivity(recoveryCtx)),
+    );
+
+    server.tool(
+      "recover_mac_services",
+      "Restart Mac Ground Control processes via launchd so the worker reconnects. Runs on the relay — works when the worker socket is down. Default scope=worker (keeps this MCP session alive). scope=relay_and_worker only if the relay is broken (drops ChatGPT MCP until reconnect). scope=full_stack also kicks cloudflared/ngrok if installed.",
+      {
+        scope: z
+          .enum(["worker", "relay_and_worker", "full_stack"])
+          .optional()
+          .describe("Default worker — safest during ChatGPT chat"),
+        wait_for_worker_sec: z
+          .number()
+          .int()
+          .min(5)
+          .max(120)
+          .optional()
+          .describe("Seconds to wait for worker WebSocket after kick (default 45)"),
+      },
+      async (args) =>
+        textResult(
+          await recoverMacServices(recoveryCtx, {
+            scope: args.scope,
+            wait_for_worker_sec: args.wait_for_worker_sec,
+          }),
+        ),
+    );
+  }
+
   server.tool(
     "list_projects",
-    "Discover workspaces under allowed_roots and list enabled agents (cursor/kimi/codex). Use workspace names when starting tasks. No per-repo registration needed.",
+    "Discover workspaces under allowed_roots and list enabled agents (codex/cursor). Kimi is historical-only. Use workspace names when starting tasks.",
     {},
     async (_args, extra) => {
       const ownerId = ownerFromAuth(extra, defaultOwnerId);
@@ -32,7 +108,7 @@ export function registerTools(
 
   server.tool(
     "list_tasks",
-    "Check in on recent and in-flight agent jobs (status, workspace, agent). Use this to see what Cursor/Kimi are doing.",
+    "Check in on recent and in-flight agent jobs (status, workspace, agent, conservation metadata).",
     {
       limit: z.number().int().positive().max(100).optional(),
     },
@@ -49,24 +125,20 @@ export function registerTools(
 
   server.tool(
     "start_task",
-    "Fire-and-forget managed job (one-shot local agent CLI), NOT an interactive terminal. Prefer create_terminal_session for multi-turn / REPL / 'drive it like I would' work. Include any needed chat-thread context in prompt — Cursor, Kimi, and Codex do not see this ChatGPT conversation automatically. Returns job id immediately; work continues on the Mac after this turn. For mock/demo only, pass project_id instead.",
+    "Fire-and-forget managed job (one-shot CLI -p), NOT an interactive terminal. Prefer create_terminal_session for multi-turn / REPL work. Each agent has its own max_concurrent and rolling start budget (get_usage preflight). If the workspace already has a queued/running job, start_task fails busy unless idempotency_key retries the same logical attempt — durable mission supervision uses idempotency keys and queues the next step on the existing worker tick instead of occupying a second slot. Job lifecycle: queued → running → succeeded|failed|timed_out|cancelled (distinct from mission verifying/ready_for_review/done). Returns job id immediately; work continues on the Mac after this turn. notify_owner is only used for mission review/done flows, not per-job completion. For mock/demo only, pass project_id instead.",
     {
-      agent: AgentSchema.describe("cursor, kimi, or codex for real local agents; mock for isolation demo"),
+      agent: AgentSchema.describe(
+        "codex or cursor for real local agents; kimi is rejected for new work; mock for isolation demo",
+      ),
       prompt: z.string().min(1).max(20_000).describe("Instructions for the agent"),
-      mission_id: z
-        .string()
-        .uuid()
-        .optional()
-        .describe(
-          "Mission supplying the approved plan, durable context, workspace lock, and handoff history. Required for implementation when Advisor is enabled.",
-        ),
+      mission_id: z.string().uuid().optional().describe("Mission with the currently approved plan. Required for implementation when Advisor is enabled."),
       workspace: z
         .string()
         .min(1)
         .max(500)
         .optional()
         .describe(
-          "Workspace folder name (e.g. ycrm or Winning/ycrm) or path under allowed_roots. Required for cursor/kimi/codex.",
+          "Workspace folder name or path under allowed_roots. Required for cursor/codex.",
         ),
       project_id: z
         .string()
@@ -75,16 +147,27 @@ export function registerTools(
       idempotency_key: z.string().max(200).optional(),
       timeout_sec: z.number().int().positive().max(86_400).optional(),
       tier: z
-        .enum(["research", "triage", "implement", "bugfix", "default"])
+        .enum([
+          "research",
+          "triage",
+          "implement",
+          "bugfix",
+          "verification",
+          "high_risk",
+          "default",
+        ])
         .optional()
         .describe(
-          "research/triage = cheap Cursor ask-mode; bugfix/implement = paced Kimi/Cursor writes. Respects usage budgets.",
+          "Conservation routing: research/triage → lighter models; implement/bugfix → Codex writes; respects usage budgets.",
         ),
       model: z
         .string()
         .max(200)
         .optional()
         .describe("Optional model override; defaults come from usage policy"),
+      conservation_override: ConservationOverrideSchema.describe(
+        "Owner override for agent/model/reasoning/task class on this job",
+      ),
     },
     async (args, extra) => {
       const ownerId = ownerFromAuth(extra, defaultOwnerId);
@@ -100,6 +183,7 @@ export function registerTools(
           timeoutSec: args.timeout_sec,
           tier: args.tier,
           model: args.model,
+          conservation_override: args.conservation_override,
         },
         ownerId,
       );
@@ -166,7 +250,7 @@ export function registerTools(
 
   server.tool(
     "terminal_capabilities",
-    "Report installed shell/cursor/kimi/codex binaries, verified model flags, supported control keys, and restart behavior for interactive sessions.",
+    "Report installed shell/cursor/codex binaries, verified model flags, Codex probe (version/auth, no secrets), supported control keys, and restart behavior for interactive sessions.",
     {},
     async (_args, extra) => {
       const ownerId = ownerFromAuth(extra, defaultOwnerId);
@@ -177,11 +261,11 @@ export function registerTools(
 
   server.tool(
     "create_terminal_session",
-    "PRIMARY tool for interactive control: start a persistent PTY on the Mac (shell, cursor, kimi, or codex) like a real terminal. Survives chat turns while the worker is up; dies on worker restart. Then write_terminal_input / read_terminal_output in a loop. Paste relevant ChatGPT-thread context into the first write so the local agent shares goals. workspace sets initial cwd under allowed_roots (not an OS sandbox). Does not attach to unrelated personal terminals.",
+    "PRIMARY tool for interactive control: start a persistent PTY on the Mac (shell, cursor, or codex) like a real terminal. Kimi sessions are disabled. Survives chat turns while the worker is up; dies on worker restart. Then write_terminal_input / read_terminal_output in a loop. workspace sets initial cwd under allowed_roots (not an OS sandbox).",
     {
       kind: z
-        .enum(["shell", "cursor", "kimi", "codex"])
-        .describe("shell for ordinary commands; cursor/kimi/codex for interactive agent CLIs"),
+        .enum(["shell", "cursor", "codex"])
+        .describe("shell for ordinary commands; cursor/codex for interactive agent CLIs"),
       workspace: z
         .string()
         .min(1)
@@ -362,7 +446,7 @@ export function registerTools(
 
   server.tool(
     "get_situation",
-    "PRIMARY awareness tool: snapshot of active/recent jobs, interactive terminal sessions with output tails, and local approvals. Call this to understand what is going on on the Mac before acting or when re-orienting mid-thread.",
+    "PRIMARY awareness tool: snapshot of active/recent jobs, interactive terminal sessions with output tails, local approvals, and approval_policy (hybrid_remote + owner_control_mode/markers for Mac vs routine routing). Call before acting or when re-orienting mid-thread.",
     {
       tail_bytes: z
         .number()
@@ -386,7 +470,7 @@ export function registerTools(
 
   server.tool(
     "request_local_approval",
-    "Mac Approve/Deny dialog for sensitive actions only (hybrid_remote policy): destructive work, external sends/deploys, credential or permission changes, scope expansions, or when the owner asks to approve locally. Do NOT use for routine read/code/test/terminal work inside an already chat-approved mission — pause in ChatGPT if the owner is away. wait=true (default) blocks until they respond or timeout; wait=false returns pending for menu-bar resolve.",
+    "Mac Approve/Deny dialog for sensitive actions only (hybrid_remote + Owner Control): destructive deletion, financial actions, external representational sends, credentials/access/permission changes, ambiguous irreversible work, or when the owner asks to approve locally. Do NOT use for routine read/code/test/terminal/build/restart/deploy/self-repair authorized by the authenticated owner in chat — those are logged without duplicate Mac dialogs. wait=true blocks until dialog gives up (approval may stay pending); wait=false returns pending for menu-bar resolve.",
     {
       kind: z
         .enum(["browser_open", "permission", "general", "destructive"])
@@ -512,6 +596,7 @@ export function registerTools(
     "approved",
     "implementing",
     "verifying",
+    "ready_for_review",
     "done",
     "blocked",
     "cancelled",
@@ -519,7 +604,7 @@ export function registerTools(
 
   server.tool(
     "create_mission",
-    "Start an orchestrated mission (e.g. 'optimize outbound'). Tracks status on the Mac whiteboard. Then research with Cursor, set plan, approve_mission, implement, complete_mission.",
+    "Start an orchestrated mission on the Mac whiteboard. Typical flow: research → plan_ready → approve_mission → implementing/verifying. With supervisor.enabled and mission_contract_json markers, bounded stages advance on the worker without further chat. Finish with submit_mission_review (ready_for_review queue — does not block other jobs) then complete_mission only after explicit owner release. complete_mission alone does not deploy or merge to main.",
     {
       title: z.string().min(1).max(200),
       goal: z.string().min(1).max(20_000),
@@ -687,8 +772,199 @@ export function registerTools(
   );
 
   server.tool(
+    "submit_mission_review",
+    "Stage a finished implementation for owner review (status ready_for_review). Fail-closed gates: contract steps complete, linked succeeded jobs, evidence_git_head matches workspace when required, review_packet_version set, usability QA job markers when completion_requires_usability. On failure sets blocked + block_reason. Optional notify_owner banner; does not push/merge/deploy.",
+    {
+      mission_id: z.string().uuid(),
+      summary: z.string().min(1).max(20_000),
+      review_packet_version: z.number().int().positive().optional(),
+      markers: z
+        .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+        .optional(),
+      notify: z.boolean().optional(),
+    },
+    async (args, extra) => {
+      const ownerId = ownerFromAuth(extra, defaultOwnerId);
+      const result = await hub.request(
+        "submit_mission_review",
+        {
+          missionId: args.mission_id,
+          summary: args.summary,
+          reviewPacketVersion: args.review_packet_version,
+          markers: args.markers,
+          notify: args.notify,
+        },
+        ownerId,
+      );
+      return textResult(result);
+    },
+  );
+
+  server.tool(
+    "enqueue_mission_project",
+    "Enqueue an approved mission on Ground's durable project queue (idempotent enqueue_key). Persists priority, FIFO order, dependencies, schedule windows, and resource class. The worker scheduler claims entries atomically, respects per-agent concurrency via start_task/get_usage, advances supervised steps without chat nudges, and stops at ready_for_review (review does not hold execution slots).",
+    {
+      mission_id: z.string().uuid(),
+      enqueue_key: z.string().min(1).max(120),
+      priority: z.number().int().min(-100).max(100).optional(),
+      depends_on: z.array(z.string().uuid()).optional(),
+      earliest_start_at: z.string().optional(),
+      schedule_until_at: z.string().optional(),
+      resource_class: z.string().max(40).optional(),
+      max_retries: z.number().int().min(0).max(10).optional(),
+      backoff_sec: z.number().int().min(0).max(3600).optional(),
+    },
+    async (args, extra) => {
+      const ownerId = ownerFromAuth(extra, defaultOwnerId);
+      const result = await hub.request(
+        "enqueue_mission_project",
+        {
+          missionId: args.mission_id,
+          enqueueKey: args.enqueue_key,
+          priority: args.priority,
+          dependsOn: args.depends_on,
+          earliestStartAt: args.earliest_start_at,
+          scheduleUntilAt: args.schedule_until_at,
+          resourceClass: args.resource_class,
+          maxRetries: args.max_retries,
+          backoffSec: args.backoff_sec,
+        },
+        ownerId,
+      );
+      return textResult(result);
+    },
+  );
+
+  server.tool(
+    "list_mission_queue",
+    "List Ground mission queue entries (priority/FIFO order) with queue_state, blockers, and next_run_at.",
+    {
+      states: z
+        .array(
+          z.enum([
+            "queued",
+            "scheduled",
+            "running",
+            "blocked",
+            "verifying",
+            "ready_for_review",
+            "completed",
+            "cancelled",
+          ]),
+        )
+        .optional(),
+      limit: z.number().int().positive().max(100).optional(),
+    },
+    async (args, extra) => {
+      const ownerId = ownerFromAuth(extra, defaultOwnerId);
+      const result = await hub.request(
+        "list_mission_queue",
+        { states: args.states, limit: args.limit },
+        ownerId,
+      );
+      return textResult(result);
+    },
+  );
+
+  server.tool(
+    "update_mission_queue_entry",
+    "Update queue metadata (priority, dependencies, schedule window, retries) for a queued/blocked entry.",
+    {
+      entry_id: z.string().uuid(),
+      priority: z.number().int().min(-100).max(100).optional(),
+      depends_on: z.array(z.string().uuid()).optional(),
+      earliest_start_at: z.string().nullable().optional(),
+      schedule_until_at: z.string().nullable().optional(),
+      resource_class: z.string().max(40).optional(),
+      max_retries: z.number().int().min(0).max(10).optional(),
+      backoff_sec: z.number().int().min(0).max(3600).optional(),
+    },
+    async (args, extra) => {
+      const ownerId = ownerFromAuth(extra, defaultOwnerId);
+      const result = await hub.request(
+        "update_mission_queue_entry",
+        {
+          entryId: args.entry_id,
+          priority: args.priority,
+          dependsOn: args.depends_on,
+          earliestStartAt: args.earliest_start_at,
+          scheduleUntilAt: args.schedule_until_at,
+          resourceClass: args.resource_class,
+          maxRetries: args.max_retries,
+          backoffSec: args.backoff_sec,
+        },
+        ownerId,
+      );
+      return textResult(result);
+    },
+  );
+
+  server.tool(
+    "cancel_mission_queue_entry",
+    "Cancel a supervised project by queue entry id (cascades jobs, queue lease, and mission status).",
+    {
+      entry_id: z.string().uuid(),
+      reason: z.string().max(500).optional(),
+    },
+    async (args, extra) => {
+      const ownerId = ownerFromAuth(extra, defaultOwnerId);
+      const result = await hub.request(
+        "cancel_mission_queue_entry",
+        { entryId: args.entry_id, reason: args.reason },
+        ownerId,
+      );
+      return textResult(result);
+    },
+  );
+
+  server.tool(
+    "cancel_mission_project",
+    "Cancel a supervised project by mission id: stop active jobs, release queue capacity, clear supervision, mark mission cancelled.",
+    {
+      mission_id: z.string().uuid(),
+      reason: z.string().max(500).optional(),
+    },
+    async (args, extra) => {
+      const ownerId = ownerFromAuth(extra, defaultOwnerId);
+      const result = await hub.request(
+        "cancel_mission_project",
+        { missionId: args.mission_id, reason: args.reason },
+        ownerId,
+      );
+      return textResult(result);
+    },
+  );
+
+  server.tool(
+    "reschedule_mission_queue_entry",
+    "Reschedule a queue entry (earliest_start, schedule_until, next_run_at, priority).",
+    {
+      entry_id: z.string().uuid(),
+      earliest_start_at: z.string().nullable().optional(),
+      schedule_until_at: z.string().nullable().optional(),
+      next_run_at: z.string().nullable().optional(),
+      priority: z.number().int().min(-100).max(100).optional(),
+    },
+    async (args, extra) => {
+      const ownerId = ownerFromAuth(extra, defaultOwnerId);
+      const result = await hub.request(
+        "reschedule_mission_queue_entry",
+        {
+          entryId: args.entry_id,
+          earliestStartAt: args.earliest_start_at,
+          scheduleUntilAt: args.schedule_until_at,
+          nextRunAt: args.next_run_at,
+          priority: args.priority,
+        },
+        ownerId,
+      );
+      return textResult(result);
+    },
+  );
+
+  server.tool(
     "complete_mission",
-    "Mark mission done, set summary + whiteboard markers, and notify the owner on the Mac. Also tell them in the ChatGPT thread that it's finished.",
+    "Mark mission done after owner release. Contract missions must be ready_for_review and pass the same evidence gates; set owner_release_authorized=true only after explicit owner consent to ship. Sets summary + markers and optional notify_owner banner.",
     {
       mission_id: z.string().uuid(),
       summary: z.string().min(1).max(20_000),
@@ -696,6 +972,10 @@ export function registerTools(
         .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
         .optional(),
       notify: z.boolean().optional(),
+      owner_release_authorized: z
+        .boolean()
+        .optional()
+        .describe("Required for contract missions — explicit post-review ship consent"),
     },
     async (args, extra) => {
       const ownerId = ownerFromAuth(extra, defaultOwnerId);
@@ -706,6 +986,7 @@ export function registerTools(
           summary: args.summary,
           markers: args.markers,
           notify: args.notify,
+          ownerReleaseAuthorized: args.owner_release_authorized,
         },
         ownerId,
       );

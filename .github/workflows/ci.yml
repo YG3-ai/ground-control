@@ -14,6 +14,10 @@ jobs:
         with:
           node-version: "20"
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r packages/relay/scripts/requirements.txt
       - run: npm ci
       - run: npm run test:setup
       - run: npm run test:release
@@ -21,8 +25,10 @@ jobs:
       - run: npm run check:dependency-licenses
       - run: npm run typecheck
       - run: npm run build
+      - run: npm run test -w @agent-control/shared
+      - run: npm run test -w @agent-control/worker
       - name: Relay privacy and YG3 tests
         run: |
           cd packages/relay
-          npx vitest run src/board-public-http.test.ts src/board-public-board.test.ts src/board-extensions/yg3-sync.test.ts src/yg3-mcp/
+          npx vitest run src/mcp/advisor-tools.test.ts src/board-public-http.test.ts src/board-public-board.test.ts src/board-extensions/yg3-sync.test.ts src/yg3-mcp/
       - run: npm run stage:release-candidate

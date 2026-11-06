@@ -8,8 +8,10 @@
   <meta name="apple-mobile-web-app-title" content="Ground" />
   <meta name="theme-color" content="#faf9f7" id="meta-theme-color" />
   <meta name="ground-board-build" content="bootstrap" />
-  <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="icon" href="/icons/__GROUND_ICON_SET__/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/__GROUND_ICON_SET__/icon-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/__GROUND_ICON_SET__/icon-180.png" />
+  <link rel="manifest" href="/manifest.webmanifest?v=__GROUND_ICON_SET__" />
   <title>Ground</title>
   <style>
     :root {
@@ -797,9 +799,9 @@
       opacity: 0;
       background: linear-gradient(
         180deg,
-        rgba(4, 6, 10, 0.22) 0%,
-        rgba(4, 6, 10, 0.34) 42%,
-        rgba(2, 4, 8, 0.42) 100%
+        rgba(2, 4, 8, 0.38) 0%,
+        rgba(1, 3, 7, 0.52) 42%,
+        rgba(0, 2, 6, 0.58) 100%
       );
       transition: opacity 0.32s cubic-bezier(0.22, 1, 0.36, 1);
     }
@@ -958,6 +960,7 @@
       overflow: visible;
       contain: none;
       pointer-events: none;
+      isolation: isolate;
       --lm-hud-rail-reserve: max(4.5rem, calc(3.25rem + env(safe-area-inset-bottom)));
       --lm-hud-stage-w: min(60vw, calc(100vw - 40vw - env(safe-area-inset-left) - env(safe-area-inset-right)));
       --lm-hud-stage-h: min(
@@ -969,6 +972,29 @@
         (100svh - env(safe-area-inset-top) - var(--lm-hud-rail-reserve) - var(--lm-hud-stage-h)) / 2 +
         var(--lm-hud-stage-h) / 2
       );
+    }
+    .lm-suit-hud-slide::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .lm-suit-hud-slide[data-mode="yg3"]::before,
+    .lm-suit-hud-slide[data-mode="ground"]::before,
+    .lm-suit-hud-slide[data-mode="archive"]::before {
+      opacity: 1;
+      background: linear-gradient(
+        180deg,
+        rgba(2, 4, 8, 0.74) 0%,
+        rgba(1, 3, 7, 0.8) 46%,
+        rgba(0, 2, 6, 0.84) 100%
+      );
+    }
+    .lm-suit-hud-plane.is-dragging .lm-suit-hud-slide::before {
+      transition: none;
     }
     @media (max-aspect-ratio: 16/10) and (min-width: 768px) {
       .lm-suit-hud-slide {
@@ -1430,6 +1456,18 @@
       font-family: var(--mono);
       color: rgba(236, 246, 255, 0.96);
     }
+    .lm-suit-hud-slide:not([data-mode="home"]) .lm-mode-cluster {
+      background: linear-gradient(
+        152deg,
+        rgba(4, 6, 10, 0.9) 0%,
+        rgba(2, 4, 8, 0.86) 48%,
+        rgba(5, 8, 12, 0.88) 100%
+      );
+      box-shadow:
+        inset 0 1px 0 rgba(220, 235, 255, 0.09),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.38),
+        0 2px 18px rgba(0, 0, 0, 0.28);
+    }
     .lm-mode-kicker {
       font-size: clamp(0.58rem, 0.8vw, 0.72rem);
       font-weight: 700;
@@ -1505,6 +1543,13 @@
       line-height: 1.1;
       color: rgba(255, 210, 170, 0.96);
       font-variant-numeric: tabular-nums;
+    }
+    .lm-yg3-metric.is-unavailable .lm-yg3-metric-val {
+      color: rgba(186, 210, 235, 0.55);
+      font-weight: 650;
+    }
+    .lm-yg3-metric.is-unavailable .lm-yg3-metric-unit {
+      color: rgba(160, 188, 218, 0.5);
     }
     .lm-yg3-metric-unit {
       font-size: clamp(0.46rem, 0.58vw, 0.52rem);
@@ -1743,6 +1788,7 @@
     }
     .lm-ground-mission-row {
       align-items: flex-start;
+      flex-wrap: wrap;
       padding: 8px 2px;
     }
     .lm-ground-mission-title {
@@ -1766,6 +1812,49 @@
       max-width: 38%;
       text-align: right;
       line-height: 1.2;
+      overflow-wrap: anywhere;
+    }
+    .lm-ground-mission-card {
+      min-width: 0;
+      border-bottom: 1px solid rgba(186, 224, 255, 0.08);
+    }
+    .lm-ground-mission-card > .lm-ground-mission-row {
+      border-bottom: 0;
+    }
+    .lm-ground-mission-detail,
+    .lm-ground-mission-action {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      white-space: normal;
+      flex-basis: 100%;
+    }
+    .lm-ground-mission-detail {
+      margin-top: 3px;
+      font-size: clamp(0.68rem, 1.9vw, 0.78rem);
+      line-height: 1.35;
+      color: rgba(205, 223, 241, 0.86);
+    }
+    .lm-ground-mission-action {
+      margin-top: 6px;
+      font-size: clamp(0.66rem, 1.8vw, 0.74rem);
+      line-height: 1.4;
+      color: rgba(188, 232, 255, 0.94);
+    }
+    .lm-ground-diagnostic {
+      margin: 0 2px 8px;
+      min-width: 0;
+      color: rgba(180, 202, 225, 0.76);
+      font-size: clamp(0.62rem, 1.7vw, 0.7rem);
+      line-height: 1.35;
+    }
+    .lm-ground-diagnostic summary { cursor: pointer; }
+    .lm-ground-diagnostic pre {
+      margin: 5px 0 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: inherit;
     }
     .lm-ground-disclosure {
       border: 0;
@@ -3681,11 +3770,18 @@
       else if (currentTab === "world") loadWorld();
       void runPollCycle();
     }
+    function clearBoardInert() {
+      try { document.documentElement.removeAttribute("inert"); } catch (e) {}
+      var appEl = $("app");
+      if (appEl) appEl.removeAttribute("inert");
+      var gateEl = $("gate");
+      if (gateEl) gateEl.removeAttribute("inert");
+    }
     function showApp() {
       $("gate").style.display = "none";
       $("gate-err").textContent = "";
       $("app").classList.add("on");
-      try { document.documentElement.removeAttribute("inert"); } catch (e) {}
+      clearBoardInert();
       syncPublicChrome();
       if (!window.__lmSpatialInit) {
         window.__lmSpatialInit = true;
@@ -3703,13 +3799,9 @@
       $("app").classList.remove("on");
       $("gate").style.display = "flex";
       $("gate-err").textContent = msg || "";
-      try { document.documentElement.setAttribute("inert", ""); } catch (e) {}
-      var gateInput = $("key");
-      if (gateInput) gateInput.removeAttribute("inert");
-      var gateGo = $("go");
-      if (gateGo) gateGo.removeAttribute("inert");
-      var gatePrev = $("gate-preview");
-      if (gatePrev && !gatePrev.hidden) gatePrev.removeAttribute("inert");
+      clearBoardInert();
+      var appEl = $("app");
+      if (appEl) appEl.setAttribute("inert", "");
     }
     function usesPasswordUnlock() {
       return PUBLIC_PREVIEW && PASSWORD_UNLOCK;
@@ -3738,6 +3830,7 @@
           if (!unlockRes.ok) {
             if (errEl) errEl.textContent = "Incorrect password.";
             if (input) input.value = "";
+            clearBoardInert();
             return false;
           }
         } else {
@@ -3766,10 +3859,12 @@
         ownerUnlocked = false;
         if (!usesPasswordUnlock()) clearKey();
         if (errEl) errEl.textContent = usesPasswordUnlock() ? "Incorrect password." : "Key rejected.";
+        clearBoardInert();
       } catch (e) {
         ownerUnlocked = wasPublic ? false : ownerUnlocked;
         if (!ownerUnlocked && !usesPasswordUnlock()) clearKey();
         if (errEl) errEl.textContent = "Cannot reach the relay.";
+        clearBoardInert();
       }
       return false;
     }
@@ -4563,6 +4658,17 @@
         secondary: String(s.state || "open"),
       };
     }
+    function yg3HeadlineMetric(label, n, unit) {
+      if (n == null || !isFinite(n)) {
+        return { label: label, value: "\u2014", unit: "N/A", unavailable: true };
+      }
+      return { label: label, value: String(n), unit: unit };
+    }
+    function yg3HudShowsOwnerMetrics(hudOwner, growth) {
+      if (hudOwner) return true;
+      if (!growth || !growth.ok || !growth.source) return false;
+      return growth.source !== "demo" && growth.source !== "none";
+    }
     function buildYg3SuitHud(growth, owner, growthLoaded) {
       var kicker = owner ? "YG3" : "OUTPUT";
       var title = owner ? "BUSINESS" : "PREVIEW";
@@ -4571,18 +4677,15 @@
         return { kicker: kicker, title: title, windowTag: null, pending: pending, signals: [] };
       }
       var s = growth.summary || {};
-      var ob = growth.outbound || {};
       var signals = [];
       function push(sig) { if (sig) signals.push(sig); }
-      push(suitMetricSignal("VISITS", s.visits, "VISITS"));
-      var fullMetrics = owner || (growth && growth.source === "demo");
-      if (fullMetrics) {
-        push(suitMetricSignal("SIGNUPS", s.signups, "SIGNUPS"));
-        push(suitMetricSignal("TRIALS", s.trials, "TRIALS"));
-        push(suitMetricSignal("DEMAND", s.demandSignups, "SIGNUPS"));
-        push(suitMetricSignal("ACTIVATION", s.activation, "USERS"));
-        push(suitMetricSignal("OUTBOUND", ob.sent, "SENT"));
-        push(suitMetricSignal("REPLIES", ob.replies, "REPLIES"));
+      var headline = owner || (growth && growth.source === "demo");
+      if (headline) {
+        signals.push(yg3HeadlineMetric("DEMAND", s.demandSignups, "NON-GIFT"));
+        signals.push(yg3HeadlineMetric("SIGNUPS", s.signups, "PLATFORM"));
+        signals.push(yg3HeadlineMetric("TRAFFIC", s.visits, "VISITS"));
+      } else {
+        push(suitMetricSignal("TRAFFIC", s.visits, "VISITS"));
       }
       var windowTag = null;
       if (growth.window) {
@@ -4802,6 +4905,80 @@
         cognitivelyActive: cognitivelyActive,
       };
     }
+    function filterMissionQueueForHud(entries) {
+      return (entries || []).filter(function (e) {
+        return e.queue_state !== "completed" && e.queue_state !== "cancelled";
+      });
+    }
+    function missionQueueStatusLabel(state) {
+      var map = {
+        queued: "Queued",
+        scheduled: "Scheduled",
+        running: "Running",
+        blocked: "Blocked",
+        verifying: "Verifying",
+        ready_for_review: "Ready for review",
+      };
+      return map[state] || String(state || "").replace(/_/g, " ");
+    }
+    function presentBlockReason(raw) {
+      if (typeof raw !== "string" || !raw.trim()) return null;
+      var technical = raw.trim();
+      if (/^(?:acceptance\s+\S+|acceptance_[\w-]+)\s+failed/i.test(technical)) {
+        return { summary: "An automated verification step failed.", ownerStep: "Open the job output, fix the failing check, then resume or retry the verify step.", technical: technical };
+      }
+      if (/waiting for an explicit resume/i.test(technical)) {
+        return { summary: "Supervision paused after a cancel or handoff.", ownerStep: "Tell Ground to resume the project, or cancel it if you want to stop.", technical: technical };
+      }
+      return { summary: technical.length > 140 ? technical.slice(0, 137).trim() + "…" : technical, ownerStep: "Resolve the blocker in chat or cancel the project if you want to stop.", technical: technical };
+    }
+    function groundMissionUpdatedLabel(iso, nowMs) {
+      var elapsed = formatGroundElapsed(iso || "", nowMs);
+      return elapsed ? (elapsed === "just now" ? elapsed : elapsed + " ago") : null;
+    }
+    function missionQueueDetailLine(entry, nowMs) {
+      if (entry.conservation_summary) return String(entry.conservation_summary).slice(0, 160);
+      if (entry.next_run_at) {
+        var t = Date.parse(entry.next_run_at);
+        if (isFinite(t) && t > nowMs) return "Scheduled to run in " + Math.ceil((t - nowMs) / 1000) + "s";
+      }
+      if (entry.priority != null && entry.priority !== 0) return "Priority " + entry.priority;
+      return null;
+    }
+    function buildMissionQueueRows(entries, needsYouByMission, nowMs) {
+      return entries.map(function (e) {
+        var needsYou = needsYouByMission[e.mission_id];
+        var raw = e.why || e.blocker_detail || (needsYou && needsYou.blocker) || null;
+        var blocked = presentBlockReason(raw);
+        var base = e.display_state_label || missionQueueStatusLabel(e.display_state || e.queue_state);
+        var updated = groundMissionUpdatedLabel(e.updated_at, nowMs);
+        return {
+          kind: "mission",
+          id: e.mission_id,
+          title: String(e.mission_title || "Project").trim(),
+          statusLabel: updated ? base + " · " + updated : base,
+          detailLabel: blocked && (e.queue_state === "blocked" || e.display_state === "blocked") ? blocked.summary : missionQueueDetailLine(e, nowMs),
+          ownerActionLabel: (needsYou && needsYou.next_owner_action) || (blocked && blocked.ownerStep) || ((e.queue_state === "ready_for_review" || e.display_state === "ready_for_review") ? "Review the implementation and authorize release when satisfied." : null),
+          technicalDetail: blocked ? blocked.technical : raw,
+          dim: e.queue_state === "blocked",
+        };
+      });
+    }
+    function buildNeedsYouGroundRows(entries) {
+      return (entries || []).map(function (e) {
+        var blocked = presentBlockReason(e.blocker);
+        return {
+          kind: "mission",
+          id: e.mission_id,
+          title: String(e.title || "Project").trim(),
+          statusLabel: e.display_state_label || e.display_state,
+          detailLabel: (blocked && blocked.summary) || e.next_owner_action,
+          ownerActionLabel: e.next_owner_action,
+          technicalDetail: (blocked && blocked.technical) || e.blocker,
+          dim: e.display_state === "blocked",
+        };
+      });
+    }
     function buildGroundSuitHud(board, owner, missionTitleFn) {
       var hydrated = boardOwnerHydratedForGround(board, owner);
       var kicker = owner ? "GROUND" : "ENGINE";
@@ -4842,6 +5019,22 @@
         }
       }
       var historyRows = collectGroundProjectHistory(board, nowMs);
+      var needsYouEntries = board.needs_you || [];
+      var queueEntries = filterMissionQueueForHud(board.mission_queue || []);
+      var needsYouByMission = {};
+      needsYouEntries.forEach(function (e) { needsYouByMission[e.mission_id] = e; });
+      var queueRows = buildMissionQueueRows(queueEntries, needsYouByMission, nowMs);
+      var queuedMissionIds = {};
+      queueEntries.forEach(function (e) { queuedMissionIds[e.mission_id] = true; });
+      var needsYouRows = buildNeedsYouGroundRows(needsYouEntries.filter(function (e) { return !queuedMissionIds[e.mission_id]; }));
+      var queueActive = 0;
+      queueEntries.forEach(function (e) {
+        if (e.queue_state === "running" || e.queue_state === "verifying") queueActive += 1;
+      });
+      if (needsYouRows.length) {
+        sections.push(suitGroundSection("needs_you", "NEEDS YOU", needsYouRows, needsYouRows.length, "Nothing needs you right now"));
+      }
+      sections.push(suitGroundSection("queue", "PROJECT QUEUE", queueRows, queueActive, "No queued projects"));
       sections.push(suitGroundSection("current_project", "CURRENT PROJECT", currentRows, currentRows.length, "READY"));
       sections.push(suitGroundSection("jobs", "JOBS", jobRows, jobActive, "No active jobs"));
       sections.push(suitGroundSection("terminals", "TERMINALS", sessionRows, termActive, "No open terminals"));
@@ -4868,7 +5061,7 @@
       layer.innerHTML = "";
       signals.forEach(function (sig) {
         var el = document.createElement("div");
-        el.className = "lm-yg3-metric";
+        el.className = "lm-yg3-metric" + (sig.unavailable ? " is-unavailable" : "");
         el.innerHTML =
           '<span class="lm-yg3-metric-lbl">' + esc(sig.label) + "</span>" +
           '<div class="lm-yg3-metric-body">' +
@@ -5003,9 +5196,17 @@
       btn.type = "button";
       var html = "";
       if (row.kind === "mission") {
-        btn.className = "lm-mode-row lm-ground-mission-row" + (row.dim ? " dim" : "");
+        var card = document.createElement("div");
+        card.className = "lm-ground-mission-card" + (row.dim ? " dim" : "");
+        btn.className = "lm-mode-row lm-ground-mission-row";
         html =
           '<span class="lm-ground-mission-title">' + esc(row.title) + "</span>" +
+          (row.detailLabel
+            ? '<span class="lm-ground-mission-detail">' + esc(row.detailLabel) + "</span>"
+            : "") +
+          (row.ownerActionLabel
+            ? '<span class="lm-ground-mission-action">' + esc(row.ownerActionLabel) + "</span>"
+            : "") +
           '<span class="lm-mode-row-secondary lm-ground-mission-status">' + esc(row.statusLabel) + "</span>";
       } else if (row.kind === "job") {
         btn.className = "lm-mode-row lm-ground-detail-row";
@@ -5047,7 +5248,19 @@
           if (sess) openTerminalBrief(sess);
         }
       });
-      parent.appendChild(btn);
+      if (row.kind === "mission") {
+        card.appendChild(btn);
+        if (row.technicalDetail) {
+          var diagnostic = document.createElement("details");
+          diagnostic.className = "lm-ground-diagnostic";
+          diagnostic.innerHTML = "<summary>Technical details</summary><pre>" + esc(row.technicalDetail) + "</pre>";
+          diagnostic.addEventListener("click", function (ev) { ev.stopPropagation(); });
+          card.appendChild(diagnostic);
+        }
+        parent.appendChild(card);
+      } else {
+        parent.appendChild(btn);
+      }
     }
     var groundHudReturn = null;
     var groundHudRestoreScroll = null;
@@ -6136,7 +6349,7 @@
     var SUIT_SWIPE_DISTANCE_RATIO_REDUCED = 0.34;
     var SUIT_SWIPE_FLICK_VELOCITY_PX_MS = 0.55;
     var SUIT_SWIPE_EDGE_RUBBER = 0.26;
-    var WORLD_READABILITY_VEIL_MAX = 0.44;
+    var WORLD_READABILITY_VEIL_MAX = 0.62;
     var SUIT_MODE_VEIL = { home: 0, yg3: 1, ground: 1, archive: 1 };
     function resolveSwipeAxis(dx, dy, current, inScroll) {
       if (current) return current;
@@ -6250,8 +6463,9 @@
     function syncYg3ModeHud() {
       var owner = !publicShellMode();
       var hudOwner = suitHudOwnerMode();
-      var pending = hudOwner && (!growthLoadFinished || growthLoading);
-      var model = buildYg3SuitHud(growthData, hudOwner, growthLoadFinished && !growthLoading);
+      var presentOwner = yg3HudShowsOwnerMetrics(hudOwner, growthData);
+      var pending = presentOwner && (!growthLoadFinished || growthLoading);
+      var model = buildYg3SuitHud(growthData, presentOwner, growthLoadFinished && !growthLoading);
       if (pending) model.pending = true;
       var kicker = $("lm-mode-yg3-kicker");
       var title = $("lm-mode-yg3-title");
@@ -6278,12 +6492,12 @@
         }
       }
       renderYg3Metrics($("lm-mode-yg3-signals"), model.pending ? [] : model.signals);
-      var accountsPending = hudOwner && (!yg3AccountsLoadFinished || yg3AccountsLoading);
+      var accountsPending = presentOwner && (!yg3AccountsLoadFinished || yg3AccountsLoading);
       renderYg3AccountsFeed(
         $("lm-yg3-accounts-feed"),
         $("lm-yg3-accounts-status"),
         $("lm-yg3-accounts-block"),
-        hudOwner,
+        presentOwner,
         yg3AccountsData,
         accountsPending,
       );
@@ -7830,6 +8044,14 @@
       if (bp.workLine) {
         body += '<div class="wb-bp-section"><div class="int-k">Current work</div><div>' + esc(bp.workLine) + "</div></div>";
       }
+      if (m.display_state_label) {
+        body += '<div class="wb-bp-section"><div class="int-k">Delivery</div><div>' +
+          esc(m.display_state_label) +
+          (m.next_owner_action ? " · " + esc(m.next_owner_action) : "") +
+          "</div></div>";
+      }
+      body += '<div class="wb-bp-section" id="mission-timeline-panel"><div class="int-k">Timeline</div>' +
+        '<div class="lm-ground-history-feed" id="mission-timeline-feed">Loading…</div></div>';
       if (m.goal) {
         body += '<div class="wb-bp-section"><div class="int-k">Goal</div><div>' + esc(m.goal) + "</div></div>";
       }
@@ -7849,6 +8071,36 @@
       }
       body += "</div>";
       openSheet(m.title || "Mission", body);
+      var feed = document.getElementById("mission-timeline-feed");
+      if (!feed || !m.id) return;
+      fetch("/api/board/missions/" + encodeURIComponent(m.id) + "/timeline", { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error("timeline unavailable")); })
+        .then(function (data) {
+          feed.textContent = "";
+          var entries = (data && data.entries) || [];
+          if (!entries.length) {
+            feed.textContent = "No timeline events yet.";
+            return;
+          }
+          entries.slice(-40).forEach(function (e) {
+            var row = document.createElement("div");
+            row.className = "lm-ground-history-row";
+            row.innerHTML =
+              '<span class="lm-ground-history-title">' + esc(e.label || e.verb) + "</span>" +
+              '<span class="lm-ground-history-meta">' + esc(relTime(e.occurred_at)) + "</span>";
+            feed.appendChild(row);
+          });
+          if (data.supervision_heartbeat_at) {
+            var hb = document.createElement("div");
+            hb.className = "lm-ground-history-meta";
+            hb.style.marginTop = "6px";
+            hb.textContent = "Last heartbeat " + relTime(data.supervision_heartbeat_at);
+            feed.appendChild(hb);
+          }
+        })
+        .catch(function () {
+          feed.textContent = "Timeline unavailable (worker offline or private preview).";
+        });
     }
 
     function momentumRow(m) {

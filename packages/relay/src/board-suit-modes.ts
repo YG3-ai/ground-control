@@ -17,10 +17,28 @@ import {
   type GroundSection,
 } from "./board-ground-present.js";
 import { openTerminalSessions } from "./board-session-activity.js";
+import {
+  buildMissionQueueRows,
+  filterMissionQueueForHud,
+  type MissionQueueBoardEntry,
+} from "./board-mission-queue.js";
+import {
+  buildNeedsYouGroundRows,
+  needsYouFromBoard,
+} from "./board-needs-you.js";
+import {
+  filterNeedsYouExclusiveOfQueue,
+  indexNeedsYouByMission,
+} from "./board-ground-work-cards.js";
 
 const GENERIC_SESSION_NOTE_RE = /^Session cwd is/i;
 
-export type SuitSignal = { label: string; value: string; unit: string };
+export type SuitSignal = {
+  label: string;
+  value: string;
+  unit: string;
+  unavailable?: boolean;
+};
 
 export type Yg3SuitHud = {
   kicker: string;
@@ -82,6 +100,7 @@ export type ArchiveSuitHud = {
 export type GrowthLike = {
   ok?: boolean;
   health?: string;
+  source?: string;
   window?: string | null;
   summary?: {
     visits?: number | null;
@@ -95,6 +114,18 @@ export type GrowthLike = {
 
 function metricSignal(label: string, n: number | null | undefined, unit: string): SuitSignal | null {
   if (n == null || !Number.isFinite(n) || n <= 0) return null;
+  return { label, value: String(n), unit };
+}
+
+/** Fixed YG3 headline slot — shows unavailable instead of hiding null metrics. */
+function yg3HeadlineMetric(
+  label: string,
+  n: number | null | undefined,
+  unit: string,
+): SuitSignal {
+  if (n == null || !Number.isFinite(n)) {
+    return { label, value: "—", unit: "N/A", unavailable: true };
+  }
   return { label, value: String(n), unit };
 }
 
@@ -128,6 +159,16 @@ export function formatTerminalSessionLabel(s: Record<string, unknown>): {
   };
 }
 
+/** Owner YG3 metrics when session is unlocked or live growth is non-demo (e.g. board 503 but extensions OK). */
+export function yg3HudShowsOwnerMetrics(
+  hudOwner: boolean,
+  growth: GrowthLike | null | undefined,
+): boolean {
+  if (hudOwner) return true;
+  if (!growth?.ok || !growth.source) return false;
+  return growth.source !== "demo" && growth.source !== "none";
+}
+
 export function buildYg3SuitHud(
   growth: GrowthLike | null | undefined,
   owner: boolean,
@@ -140,19 +181,17 @@ export function buildYg3SuitHud(
     return { kicker, title, windowTag: null, pending, signals: [] };
   }
   const s = growth.summary || {};
-  const ob = growth.outbound || {};
   const signals: SuitSignal[] = [];
   const push = (sig: SuitSignal | null) => {
     if (sig) signals.push(sig);
   };
-  push(metricSignal("VISITS", s.visits, "VISITS"));
-  if (owner) {
-    push(metricSignal("SIGNUPS", s.signups, "SIGNUPS"));
-    push(metricSignal("TRIALS", s.trials, "TRIALS"));
-    push(metricSignal("DEMAND", s.demandSignups, "SIGNUPS"));
-    push(metricSignal("ACTIVATION", s.activation, "USERS"));
-    push(metricSignal("OUTBOUND", ob.sent, "SENT"));
-    push(metricSignal("REPLIES", ob.replies, "REPLIES"));
+  const headline = owner || growth.source === "demo";
+  if (headline) {
+    signals.push(yg3HeadlineMetric("DEMAND", s.demandSignups, "NON-GIFT"));
+    signals.push(yg3HeadlineMetric("SIGNUPS", s.signups, "PLATFORM"));
+    signals.push(yg3HeadlineMetric("TRAFFIC", s.visits, "VISITS"));
+  } else {
+    push(metricSignal("TRAFFIC", s.visits, "VISITS"));
   }
   const windowTag =
     growth.window && /^\d+$/.test(String(growth.window))
@@ -166,6 +205,9 @@ export function buildYg3SuitHud(
 type BoardLike = {
   public_preview?: boolean;
   columns?: Record<string, Array<Record<string, unknown>>>;
+  missions?: Array<Record<string, unknown>>;
+  needs_you?: import("./board-needs-you.js").NeedsYouBoardEntry[];
+  mission_queue?: MissionQueueBoardEntry[];
   tasks?: Array<Record<string, unknown>>;
   active_tasks?: Array<Record<string, unknown>>;
   terminal_sessions?: Array<Record<string, unknown>>;
@@ -239,7 +281,40 @@ export function buildGroundSuitHud(
   const jobActive = countActiveGroundJobs(tasks);
   const termActive = countActiveGroundTerminals(sessions, nowMs);
   const historyRows: GroundRow[] = collectGroundProjectHistory(board, nowMs);
-  const sections: GroundSection[] = [
+  const needsYouEntries = needsYouFromBoard(board);
+  const needsYouByMission = indexNeedsYouByMission(needsYouEntries);
+  const queueEntries = filterMissionQueueForHud(board.mission_queue ?? []);
+  const queueRows: GroundRow[] = buildMissionQueueRows(
+    queueEntries,
+    needsYouByMission,
+    nowMs,
+  );
+  const queueActive = queueEntries.filter((e) =>
+    ["running", "verifying"].includes(e.queue_state),
+  ).length;
+  const needsYouRows: GroundRow[] = buildNeedsYouGroundRows(
+    filterNeedsYouExclusiveOfQueue(needsYouEntries, queueEntries),
+  );
+  const sections: GroundSection[] = [];
+  if (needsYouRows.length) {
+    sections.push(
+      groundSection(
+        "needs_you",
+        "NEEDS YOU",
+        needsYouRows,
+        needsYouRows.length,
+        "Nothing needs you right now",
+      ),
+    );
+  }
+  sections.push(
+    groundSection(
+      "queue",
+      "PROJECT QUEUE",
+      queueRows,
+      queueActive,
+      "No queued projects",
+    ),
     groundSection(
       "current_project",
       "CURRENT PROJECT",
@@ -256,7 +331,7 @@ export function buildGroundSuitHud(
       0,
       "No completed projects yet",
     ),
-  ];
+  );
   return { kicker, title, hydrated, sections };
 }
 

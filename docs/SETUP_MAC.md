@@ -85,3 +85,7 @@ Checks loopback `healthz` and `worker.connected` only (no secret output).
 - [ChatGPT / MCP](CHATGPT.md)
 - [Access boundaries](ACCESS.md)
 - [Phone board](PHONE_BOARD.md)
+
+## Build image dependency
+
+The relay icon build requires Python 3 with Pillow. Install the pinned dependency using python3 -m pip install -r packages/relay/scripts/requirements.txt in your Python environment. CI uses Python 3.12 and installs it explicitly. The shared package typecheck emits its declared workspace exports before downstream package checks, so a clean clone does not depend on existing dist files.

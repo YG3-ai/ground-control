@@ -28,16 +28,17 @@ export function growthFeedFromYg3Snapshot(
     to: null,
     generatedAt: s.syncedAt,
     summary: {
+      /** Client-scoped analytics fallback only; platform metrics come from growth runner merge. */
       visits: s.growth.visits,
-      signups: s.growth.leads,
+      signups: null,
       trials: null,
-      activation: s.workspace.connectedCount,
-      demandSignups: s.growth.opportunities,
+      activation: null,
+      demandSignups: null,
     },
     outbound: {
       sent: null,
-      replies: s.growth.leads,
-      note: "YG3 MCP snapshot aggregates (no message bodies).",
+      replies: null,
+      note: null,
     },
     funnelRows: s.growth.trafficRows.map((r) => ({
       key: r.key,
@@ -49,29 +50,40 @@ export function growthFeedFromYg3Snapshot(
   };
 }
 
+/** v1 snapshots store aggregates only — no persisted client account rows. */
+export function snapshotHasRealAccountsFeed(snapshot: Yg3SnapshotV1): boolean {
+  const rows = (snapshot as Yg3SnapshotV1 & { recentAccounts?: unknown }).recentAccounts;
+  return Array.isArray(rows) && rows.length > 0;
+}
+
 export function yg3AccountsFeedFromSnapshot(
   load: Yg3SnapshotLoadResult,
 ): Yg3AccountsFeedPayload | null {
   if (!load.enabled || !load.snapshot || load.source !== "yg3-mcp") {
     return null;
   }
+  if (!snapshotHasRealAccountsFeed(load.snapshot)) {
+    return null;
+  }
   const s = load.snapshot;
-  const items = [];
-  const n = Math.min(
-    s.workspace.clientsInScope ?? s.workspace.clientCount,
-    40,
-  );
-  for (let i = 0; i < n; i += 1) {
-    const scoped =
-      i === 0 && s.workspace.privateScopedDisplayName
-        ? s.workspace.privateScopedDisplayName
-        : null;
-    items.push({
-      id: `ws-${i + 1}`,
-      name: scoped ?? `Workspace ${i + 1}`,
-      email: "",
-      createdAt: s.syncedAt,
-    });
+  const raw = (s as Yg3SnapshotV1 & {
+    recentAccounts: Array<{
+      id?: string;
+      name?: string;
+      email?: string;
+      createdAt?: string;
+    }>;
+  }).recentAccounts;
+  const items = raw
+    .map((row) => ({
+      id: String(row.id ?? "").trim(),
+      name: String(row.name ?? "").trim(),
+      email: String(row.email ?? "").trim(),
+      createdAt: String(row.createdAt ?? "").trim(),
+    }))
+    .filter((row) => row.id && row.name && row.createdAt);
+  if (!items.length) {
+    return null;
   }
   return {
     ok: true,

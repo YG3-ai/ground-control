@@ -1,13 +1,8 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import {
   loadLocalEnv,
@@ -44,9 +39,12 @@ test("parseLocalEnvFile reads spaced paths without shell source", () => {
 
 test("repo root from scripts module resolves", () => {
   const root = repoRootFromScriptsModule(import.meta.url);
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  assert.equal(root, join(scriptsDir, ".."));
   const pkgPath = join(root, "package.json");
   assert.ok(existsSync(pkgPath));
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   assert.equal(pkg.name, "agent-control");
   assert.ok(existsSync(join(root, "scripts", "load-local-env.mjs")));
+  assert.ok(existsSync(join(root, "packages", "relay", "package.json")));
 });

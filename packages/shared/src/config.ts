@@ -48,10 +48,29 @@ const ConfigSchema = z.object({
     }),
   }),
   supervisor: z
-    .object({ enabled: z.boolean().default(false) })
+    .object({
+      enabled: z.boolean().default(false),
+      poll_missions_sec: z.number().int().min(0).max(300).optional(),
+      default_max_step_retries: z.number().int().min(0).max(10).optional(),
+      queue_max_concurrent: z.number().int().min(1).max(20).optional(),
+      queue_claim_lease_sec: z.number().int().min(30).max(86400).optional(),
+      queue_auto_review: z.boolean().optional(),
+      job_stale_sec: z.number().int().min(1).max(86_400).optional(),
+      connection_retry_limit: z.number().int().min(1).max(20).optional(),
+    })
     .optional()
     .default({ enabled: false }),
-  advisor: z.object({ enabled: z.boolean().default(false) }).optional(),
+  // Advisor is canonical. Supervisor is retained as a backwards-compatible alias.
+  advisor: z.object({
+    enabled: z.boolean().default(false),
+    poll_missions_sec: z.number().int().min(0).max(300).optional(),
+    default_max_step_retries: z.number().int().min(0).max(10).optional(),
+    queue_max_concurrent: z.number().int().min(1).max(20).optional(),
+    queue_claim_lease_sec: z.number().int().min(30).max(86400).optional(),
+    queue_auto_review: z.boolean().optional(),
+    job_stale_sec: z.number().int().min(1).max(86_400).optional(),
+    connection_retry_limit: z.number().int().min(1).max(20).optional(),
+  }).optional(),
   agents: z.record(
     z.object({
       enabled: z.boolean(),

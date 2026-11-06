@@ -19,6 +19,9 @@ function mission(partial: Partial<MissionRecord> & { status: MissionRecord["stat
     workspace: "demo",
     status: partial.status,
     plan: "plan",
+    plan_revision: 1,
+    approved_revision: 1,
+    handoff: null,
     findings: null,
     summary: null,
     markers: partial.markers ?? {},
@@ -81,5 +84,17 @@ describe("approval-policy hybrid_remote", () => {
         detail: "run vitest",
       }),
     ).toBe(false);
+    expect(
+      isSensitiveApprovalRequest({
+        kind: "general",
+        title: "Revoke access",
+        detail: "remove contractor login",
+      }),
+    ).toBe(true);
   });
+});
+
+it("rejects missing approval provenance and stale revisions", () => {
+ expect(missionRoutineScopeApproved(mission({status: "approved"}))).toBe(false);
+ expect(missionRoutineScopeApproved(mission({status: "approved", plan_revision: 2, approved_revision: 1, markers: {approval_policy: "hybrid_remote", approval_source: "chat_explicit"}}))).toBe(false);
 });

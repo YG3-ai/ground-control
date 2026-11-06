@@ -142,9 +142,7 @@ export class RelayClient {
             : undefined,
           agent: msg.params.agent as "mock" | "cursor" | "kimi" | "codex",
           prompt: String(msg.params.prompt ?? ""),
-          missionId: msg.params.missionId
-            ? String(msg.params.missionId)
-            : undefined,
+          missionId: msg.params.missionId ? String(msg.params.missionId) : undefined,
           idempotencyKey: msg.params.idempotencyKey
             ? String(msg.params.idempotencyKey)
             : undefined,
@@ -157,9 +155,14 @@ export class RelayClient {
                 | "triage"
                 | "implement"
                 | "bugfix"
+                | "verification"
+                | "high_risk"
                 | "default")
             : undefined,
           model: msg.params.model ? String(msg.params.model) : undefined,
+          conservation_override: msg.params.conservation_override as
+            | import("@agent-control/shared").StartTaskInput["conservation_override"]
+            | undefined,
         });
       case "get_task":
         return this.service.getTask(ownerId, String(msg.params.jobId ?? ""));
@@ -176,7 +179,11 @@ export class RelayClient {
       case "create_terminal_session":
         return this.service.createTerminalSession({
           ownerId,
-          kind: String(msg.params.kind ?? "shell") as "shell" | "cursor" | "kimi" | "codex",
+          kind: String(msg.params.kind ?? "shell") as
+            | "shell"
+            | "cursor"
+            | "kimi"
+            | "codex",
           workspace: String(msg.params.workspace ?? ""),
           model: msg.params.model ? String(msg.params.model) : undefined,
           cols: msg.params.cols != null ? Number(msg.params.cols) : undefined,
@@ -349,6 +356,22 @@ export class RelayClient {
           ownerId,
           String(msg.params.missionId ?? ""),
         );
+      case "get_mission_timeline":
+        return this.service.getMissionTimeline(
+          ownerId,
+          String(msg.params.missionId ?? msg.params.mission_id ?? ""),
+        );
+      case "record_mission_deployment":
+        return this.service.recordMissionDeployment(
+          ownerId,
+          String(msg.params.missionId ?? msg.params.mission_id ?? ""),
+          {
+            kind: String(msg.params.kind ?? "staging") as
+              | "staging"
+              | "owner_release"
+              | "none",
+          },
+        );
       case "update_mission":
         return this.service.updateMission(
           ownerId,
@@ -461,6 +484,159 @@ export class RelayClient {
               msg.params.notify === undefined
                 ? undefined
                 : Boolean(msg.params.notify),
+            owner_release_authorized:
+              msg.params.ownerReleaseAuthorized === true ||
+              msg.params.owner_release_authorized === true,
+          },
+        );
+      case "submit_mission_review":
+        return this.service.submitMissionReview(
+          ownerId,
+          String(msg.params.missionId ?? ""),
+          {
+            summary: String(msg.params.summary ?? ""),
+            markers:
+              msg.params.markers && typeof msg.params.markers === "object"
+                ? (msg.params.markers as Record<
+                    string,
+                    string | number | boolean | null
+                  >)
+                : undefined,
+            review_packet_version:
+              msg.params.reviewPacketVersion != null
+                ? Number(msg.params.reviewPacketVersion)
+                : undefined,
+            notify:
+              msg.params.notify === undefined
+                ? undefined
+                : Boolean(msg.params.notify),
+          },
+        );
+      case "enqueue_mission_project":
+        return this.service.enqueueMissionProject(ownerId, {
+          missionId: String(msg.params.missionId ?? ""),
+          enqueueKey: String(msg.params.enqueueKey ?? msg.params.enqueue_key ?? ""),
+          priority:
+            msg.params.priority != null ? Number(msg.params.priority) : undefined,
+          dependsOn: Array.isArray(msg.params.dependsOn ?? msg.params.depends_on)
+            ? ((msg.params.dependsOn ?? msg.params.depends_on) as unknown[]).map(String)
+            : undefined,
+          earliestStartAt:
+            msg.params.earliestStartAt === null
+              ? null
+              : msg.params.earliestStartAt != null
+                ? String(msg.params.earliestStartAt)
+                : msg.params.earliest_start_at === null
+                  ? null
+                  : msg.params.earliest_start_at != null
+                    ? String(msg.params.earliest_start_at)
+                    : undefined,
+          scheduleUntilAt:
+            msg.params.scheduleUntilAt === null
+              ? null
+              : msg.params.scheduleUntilAt != null
+                ? String(msg.params.scheduleUntilAt)
+                : undefined,
+          resourceClass:
+            msg.params.resourceClass != null
+              ? String(msg.params.resourceClass)
+              : msg.params.resource_class != null
+                ? String(msg.params.resource_class)
+                : undefined,
+          maxRetries:
+            msg.params.maxRetries != null
+              ? Number(msg.params.maxRetries)
+              : undefined,
+          backoffSec:
+            msg.params.backoffSec != null ? Number(msg.params.backoffSec) : undefined,
+        });
+      case "list_mission_queue":
+        return this.service.listMissionQueue(ownerId, {
+          limit: msg.params.limit != null ? Number(msg.params.limit) : undefined,
+          states: Array.isArray(msg.params.states)
+            ? (msg.params.states as string[]).map(String) as (
+                | "queued"
+                | "scheduled"
+                | "running"
+                | "blocked"
+                | "verifying"
+                | "ready_for_review"
+                | "completed"
+                | "cancelled"
+              )[]
+            : undefined,
+        });
+      case "update_mission_queue_entry":
+        return this.service.updateMissionQueueEntry(
+          ownerId,
+          String(msg.params.entryId ?? msg.params.entry_id ?? ""),
+          {
+            priority:
+              msg.params.priority != null ? Number(msg.params.priority) : undefined,
+            dependsOn: Array.isArray(msg.params.dependsOn)
+              ? msg.params.dependsOn.map(String)
+              : undefined,
+            earliestStartAt:
+              msg.params.earliestStartAt === null
+                ? null
+                : msg.params.earliestStartAt != null
+                  ? String(msg.params.earliestStartAt)
+                  : undefined,
+            scheduleUntilAt:
+              msg.params.scheduleUntilAt === null
+                ? null
+                : msg.params.scheduleUntilAt != null
+                  ? String(msg.params.scheduleUntilAt)
+                  : undefined,
+            resourceClass:
+              msg.params.resourceClass != null
+                ? String(msg.params.resourceClass)
+                : undefined,
+            maxRetries:
+              msg.params.maxRetries != null
+                ? Number(msg.params.maxRetries)
+                : undefined,
+            backoffSec:
+              msg.params.backoffSec != null ? Number(msg.params.backoffSec) : undefined,
+          },
+        );
+      case "cancel_mission_queue_entry":
+        return this.service.cancelMissionQueueEntry(
+          ownerId,
+          String(msg.params.entryId ?? msg.params.entry_id ?? ""),
+          msg.params.reason != null ? String(msg.params.reason) : undefined,
+        );
+      case "cancel_mission_project":
+        return this.service.cancelMissionProject(
+          ownerId,
+          String(msg.params.missionId ?? msg.params.mission_id ?? ""),
+          msg.params.reason != null ? String(msg.params.reason) : undefined,
+        );
+      case "reschedule_mission_queue_entry":
+        return this.service.rescheduleMissionQueueEntry(
+          ownerId,
+          String(msg.params.entryId ?? msg.params.entry_id ?? ""),
+          {
+            earliestStartAt:
+              msg.params.earliestStartAt === null
+                ? null
+                : msg.params.earliestStartAt != null
+                  ? String(msg.params.earliestStartAt)
+                  : undefined,
+            scheduleUntilAt:
+              msg.params.scheduleUntilAt === null
+                ? null
+                : msg.params.scheduleUntilAt != null
+                  ? String(msg.params.scheduleUntilAt)
+                  : undefined,
+            nextRunAt:
+              msg.params.nextRunAt === null
+                ? null
+                : msg.params.nextRunAt != null
+                  ? String(msg.params.nextRunAt)
+                  : undefined,
+            priority:
+              msg.params.priority != null ? Number(msg.params.priority) : undefined,
           },
         );
       case "get_usage":

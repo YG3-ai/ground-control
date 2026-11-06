@@ -59,6 +59,7 @@ final class StatusModel: ObservableObject {
   @Published var localControlOk = false
 
   private var timer: Timer?
+  private var lastSelfHeal = Date.distantPast
 
   var iconName: String {
     if !pendingApprovals.isEmpty { return "bell.badge" }
@@ -88,6 +89,19 @@ final class StatusModel: ObservableObject {
 
   /// Kickstarts relay, ngrok, and worker (installs LaunchAgents on first run).
   private static func ensureBackendServices() {
+    runEnsureServicesScript()
+  }
+
+  /// Re-run ensure-services when relay is up but the worker socket is down (throttled).
+  private func selfHealBackendIfNeeded(relayUp: Bool, workerUp: Bool) {
+    guard relayUp, !workerUp else { return }
+    let now = Date()
+    guard now.timeIntervalSince(lastSelfHeal) >= 30 else { return }
+    lastSelfHeal = now
+    Self.runEnsureServicesScript()
+  }
+
+  private static func runEnsureServicesScript() {
     let script = projectRoot + "/scripts/ensure-services.sh"
     DispatchQueue.global(qos: .utility).async {
       let task = Process()
@@ -113,6 +127,7 @@ final class StatusModel: ObservableObject {
         let fmt = DateFormatter()
         fmt.timeStyle = .short
         self.lastChecked = fmt.string(from: Date())
+        self.selfHealBackendIfNeeded(relayUp: h.ok, workerUp: h.worker)
       }
     }
   }

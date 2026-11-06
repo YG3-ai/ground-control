@@ -269,8 +269,8 @@ describe("YG3 snapshot sync", () => {
     const growth = growthFeedFromYg3Snapshot(load, "7d");
     expect(growth?.source).toBe("yg3-mcp");
     const accounts = yg3AccountsFeedFromSnapshot(load);
-    expect(accounts?.items[0]?.name).toMatch(/^Workspace /);
-    expect(accounts?.items.every((r) => !r.email.includes("@"))).toBe(true);
+    expect(accounts).toBeNull();
+    expect(growth?.summary.activation).toBeNull();
     const life = lifecycleFeedFromYg3Snapshot(load);
     expect(life?.source).toBe("yg3-mcp");
   });

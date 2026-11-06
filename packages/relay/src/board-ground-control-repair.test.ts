@@ -25,6 +25,16 @@ describe("ground control repair markers (board.html)", () => {
   it("persist back label remains Back", () => {
     expect(html).toContain('<span class="lm-back-label">Back</span>');
   });
+
+  it("gate unlock inerts only #app, never documentElement", () => {
+    expect(html).toContain("function clearBoardInert()");
+    expect(html).not.toMatch(
+      /document\.documentElement\.setAttribute\(\s*["']inert["']/,
+    );
+    const showGate = html.match(/function showGate\([\s\S]*?^    }/m)?.[0] ?? "";
+    expect(showGate).toContain('appEl.setAttribute("inert", "")');
+    expect(showGate).not.toContain('document.documentElement.setAttribute("inert"');
+  });
 });
 
 describe("ground control repair (playwright)", () => {
@@ -92,6 +102,49 @@ describe("ground control repair (playwright)", () => {
       },
       { timeout: 10_000 },
     );
+    await page.close();
+  });
+
+  it("owner gate #key is focusable and hit-testable after Sign in", async () => {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+    });
+    await page.goto(`${baseUrl}/board`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.locator("#lm-public-signin-hero").tap();
+    await page.waitForSelector("#gate", { state: "visible", timeout: 10_000 });
+    const gateState = await page.evaluate(() => {
+      const input = document.getElementById("key") as HTMLInputElement | null;
+      const htmlInert = document.documentElement.hasAttribute("inert");
+      const bodyInert = document.body.hasAttribute("inert");
+      const gateInert = document.getElementById("gate")?.hasAttribute("inert") ?? false;
+      const appInert = document.getElementById("app")?.hasAttribute("inert") ?? false;
+      let hitInput = false;
+      if (input) {
+        const r = input.getBoundingClientRect();
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        hitInput = top === input;
+        input.focus();
+      }
+      return {
+        htmlInert,
+        bodyInert,
+        gateInert,
+        appInert,
+        hitInput,
+        activeIsKey: document.activeElement?.id === "key",
+        inputDisabled: input ? input.disabled : true,
+      };
+    });
+    expect(gateState.htmlInert).toBe(false);
+    expect(gateState.bodyInert).toBe(false);
+    expect(gateState.gateInert).toBe(false);
+    expect(gateState.appInert).toBe(true);
+    expect(gateState.hitInput).toBe(true);
+    expect(gateState.inputDisabled).toBe(false);
+    expect(gateState.activeIsKey).toBe(true);
+    await page.locator("#key").fill("qa-placeholder-not-a-password");
+    await page.locator("#key").fill("");
     await page.close();
   });
 

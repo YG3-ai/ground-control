@@ -8,6 +8,12 @@ type Pending = {
   timer: NodeJS.Timeout;
 };
 
+/** WebSocket close code when a second worker tries to connect while one is healthy. */
+export const DUPLICATE_WORKER_CLOSE_CODE = 4004;
+export const DUPLICATE_WORKER_CLOSE_REASON = "duplicate worker";
+
+export type WorkerAttachResult = "attached" | "rejected_duplicate";
+
 /**
  * Tracks the Mac worker's outbound WebSocket and multiplexes MCP tool RPCs.
  */
@@ -17,17 +23,35 @@ export class WorkerHub {
   private readonly pending = new Map<string, Pending>();
 
   get connected(): boolean {
-    return this.socket != null && this.socket.readyState === 1;
+    return this.isHealthySocket(this.socket);
   }
 
-  attach(ws: WebSocket, workerId: string): void {
-    if (this.socket && this.socket !== ws) {
+  private isHealthySocket(ws: WebSocket | null): boolean {
+    return ws != null && ws.readyState === 1;
+  }
+
+  attach(ws: WebSocket, workerId: string): WorkerAttachResult {
+    const active = this.socket;
+    if (active && active !== ws && this.isHealthySocket(active)) {
+      console.warn(
+        `[relay] rejected duplicate worker connection (active_worker_id=${this.workerId ?? "unknown"})`,
+      );
       try {
-        this.socket.close(4000, "replaced by new worker connection");
+        ws.close(DUPLICATE_WORKER_CLOSE_CODE, DUPLICATE_WORKER_CLOSE_REASON);
+      } catch {
+        // ignore
+      }
+      return "rejected_duplicate";
+    }
+
+    if (active && active !== ws && !this.isHealthySocket(active)) {
+      try {
+        active.close(4000, "replaced by new worker connection");
       } catch {
         // ignore
       }
     }
+
     this.socket = ws;
     this.workerId = workerId;
     ws.on("close", () => {
@@ -41,6 +65,7 @@ export class WorkerHub {
         }
       }
     });
+    return "attached";
   }
 
   handleWorkerMessage(msg: WorkerMessage): void {

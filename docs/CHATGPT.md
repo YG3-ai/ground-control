@@ -1,3 +1,13 @@
+# Project coordination
+Jacqueline's Advisor architecture is the coordination source of truth. Use
+submit_mission_plan to persist the plan revision and approve_mission after
+owner authorization. Pass mission_id on managed jobs; implementation requires
+the current revision's approval. For multi-step projects, persist the contract
+and let the durable queue advance it through acceptance and review. Carry the
+recorded handoff forward, observe actual job progress, and preserve owner stop
+and release decisions. Do not substitute a manual stream of unlinked jobs for
+this workflow. Routine in-scope work uses the owner's existing authorization.
+
 # Connect ChatGPT (mobile) to agent-control
 
 Official references:
@@ -48,3 +58,13 @@ curl -s -X POST http://127.0.0.1:8787/oauth/dev/token \
 ```
 
 Use the access token as `Authorization: Bearer …` against `/mcp`. Prefer the automated relay e2e tests.
+
+## Worker disconnected (phone-only recovery)
+
+If ChatGPT tools fail with **Mac worker is not connected** but the plugin still loads:
+
+1. Call **`get_mac_connectivity`** (relay-side; no worker required).
+2. Call **`recover_mac_services`** with **`scope=worker`** (default). This runs `launchctl kickstart` on the Mac worker LaunchAgent and waits for the WebSocket to reconnect **without restarting the relay** (so your ChatGPT MCP session stays up).
+3. Use **`scope=relay_and_worker`** only if local `/healthz` is down — that restarts the relay and **drops** the active MCP connection until you send another message.
+
+Local fallback on the Mac: `./scripts/restart-ground-control.sh`

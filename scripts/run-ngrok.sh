@@ -3,20 +3,18 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
-set -a && source "$ROOT/.env" && set +a
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 # (ngrok only — no Node ABI concerns)
-
-HOST="${PUBLIC_BASE_URL#https://}"
-HOST="${HOST#http://}"
-HOST="${HOST%%/*}"
-PORT="${RELAY_PORT:-8787}"
-
-if [[ -z "$HOST" || "$HOST" == *"127.0.0.1"* ]]; then
-  echo "PUBLIC_BASE_URL must be your stable ngrok domain" >&2
-  exit 1
-fi
-
 mkdir -p "$ROOT/logs"
-exec ngrok http --url "https://$HOST" "$PORT" --log=stdout
+exec node -e '
+  const fs = require("fs");
+  const { spawn } = require("child_process");
+  const dotenv = require("dotenv");
+  const env = fs.existsSync(".env") ? dotenv.parse(fs.readFileSync(".env")) : {};
+  const base = env.PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || "";
+  const host = base.replace(/^https?:\/\//, "").split("/")[0];
+  const port = env.RELAY_PORT || process.env.RELAY_PORT || "8787";
+  if (!host || host.includes("127.0.0.1")) { console.error("PUBLIC_BASE_URL must be your stable ngrok domain"); process.exit(1); }
+  spawn("ngrok", ["http", "--url", `https://${host}`, port, "--log=stdout"], { env: { ...process.env, ...env }, stdio: "inherit" })
+    .on("exit", (code) => process.exit(code ?? 1));
+'

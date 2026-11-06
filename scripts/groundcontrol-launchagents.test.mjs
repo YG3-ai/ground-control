@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
@@ -8,11 +8,25 @@ import {
   agentLabel,
   assessIndependentRemoteRecovery,
   renderAllGroundControlLaunchAgents,
+  resolveGroundControlAgentNames,
+  shouldUseNgrokLaunchAgent,
   stageGroundControlLaunchAgents,
   GROUND_CONTROL_AGENT_NAMES,
 } from "./groundcontrol-launchagents.mjs";
 
 const repoRoot = join(import.meta.dirname, "..");
+
+test("resolveGroundControlAgentNames skips ngrok for Cloudflare public URL", () => {
+  assert.equal(shouldUseNgrokLaunchAgent("https://my.parthaunnava.com"), false);
+  assert.equal(shouldUseNgrokLaunchAgent("https://foo.ngrok-free.app"), true);
+  const dir = mkdtempSync(join(tmpdir(), "gc-la-env-"));
+  writeFileSync(
+    join(dir, ".env"),
+    "PUBLIC_BASE_URL=https://my.parthaunnava.com\nWORKER_TOKEN=0123456789012345678901234\n",
+  );
+  assert.deepEqual(resolveGroundControlAgentNames(dir), ["relay", "worker"]);
+  rmSync(dir, { recursive: true, force: true });
+});
 
 test("renders relay ngrok and worker plists idempotently", () => {
   const dir = mkdtempSync(join(tmpdir(), "gc-la-render-"));

@@ -78,7 +78,7 @@ describe("buildGroundSessionRow", () => {
         id: "s1",
         state: "running",
         kind: "shell",
-        workspace: "/Users/partha/Projects/agent-control",
+        workspace: "/Users/YOU/Projects/agent-control",
       },
       Date.now(),
     );
@@ -137,16 +137,17 @@ describe("buildGroundSuitHud disclosure metadata", () => {
       now,
     );
     expect(m.sections.map((s) => s.id)).toEqual([
+      "queue",
       "current_project",
       "jobs",
       "terminals",
       "history",
     ]);
-    expect(m.sections[0].collapsible).toBe(false);
-    expect(m.sections[1].collapsible).toBe(true);
-    expect(m.sections[1].defaultOpen).toBe(true);
+    expect(m.sections[1].collapsible).toBe(false);
+    expect(m.sections[2].collapsible).toBe(true);
     expect(m.sections[2].defaultOpen).toBe(true);
-    const mission = m.sections[0].rows[0];
+    expect(m.sections[3].defaultOpen).toBe(true);
+    const mission = m.sections[1].rows[0];
     expect(mission.kind).toBe("current_project");
     if (mission.kind === "current_project") expect(mission.title).toBe("Mirror HUD");
   });

@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import type { BoardExtensionPaths } from "./paths.js";
 import { workRootAdapterConfigured } from "./paths.js";
 import { runBounded } from "./safe-exec.js";
+import { mergeRunnerPlatformMetrics } from "./growth-merge.js";
 import { growthFeedFromYg3Snapshot } from "../yg3-mcp/feed-from-snapshot.js";
 import {
   loadYg3OwnerSnapshot,
@@ -255,7 +256,8 @@ export async function getGrowthFeed(
     });
     const fromMcp = growthFeedFromYg3Snapshot(yg3Load, key);
     if (fromMcp && fromMcp.health !== "unavailable") {
-      const payload = applyFreshness(fromMcp);
+      const runner = await runGrowthRunner(pathsCfg, key);
+      const payload = applyFreshness(mergeRunnerPlatformMetrics(fromMcp, runner));
       cache = { at: now, key, payload };
       return payload;
     }

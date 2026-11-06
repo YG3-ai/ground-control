@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { emitMissionProgressDelta } from "./mission-progress-events.js";
 
 export const MISSION_STATUSES = [
   "intake",
@@ -10,6 +11,7 @@ export const MISSION_STATUSES = [
   "approved",
   "implementing",
   "verifying",
+  "ready_for_review",
   "done",
   "blocked",
   "cancelled",
@@ -130,6 +132,7 @@ function rowToMission(row: MissionRow): MissionRecord {
 }
 
 export class MissionStore {
+  /** Shared WAL database (missions + mission_queue tables). */
   readonly db: Database.Database;
   /** Optional event sink (Ground Life Mirror). Metadata only — never content. */
   onEvent?: import("../events/types.js").EventSink;
@@ -319,6 +322,12 @@ export class MissionStore {
     const cur = this.get(ownerId, id);
     if (!cur) throw new Error(`mission not found: ${id}`);
     const prevStatus = cur.status;
+    const prevSnapshot: MissionRecord = {
+      ...cur,
+      linked_job_ids: [...cur.linked_job_ids],
+      linked_session_ids: [...cur.linked_session_ids],
+      markers: { ...cur.markers },
+    };
 
     if (patch.title != null) cur.title = patch.title.slice(0, 200);
     if (patch.goal != null) cur.goal = patch.goal.slice(0, 20_000);
@@ -419,6 +428,7 @@ export class MissionStore {
         dedupeKey: `status:${prevStatus}>${cur.status}:${cur.updated_at}`,
       });
     }
+    emitMissionProgressDelta(prevSnapshot, cur, this.onEvent);
     return cur;
   }
 }

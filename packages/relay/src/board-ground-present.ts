@@ -26,6 +26,14 @@ export type GroundMissionRow = {
   id: string;
   title: string;
   statusLabel: string;
+  /** Secondary line: blocker summary, next run, or owner step. */
+  detailLabel?: string | null;
+  /** Raw gate / marker text for expandable disclosure. */
+  technicalDetail?: string | null;
+  /** Relative last queue update, e.g. "5m ago". */
+  updatedLabel?: string | null;
+  /** Explicit owner CTA when the mission needs you. */
+  ownerActionLabel?: string | null;
   dim?: boolean;
 };
 
@@ -72,7 +80,13 @@ export type GroundRow =
   | GroundSessionRow
   | GroundHistoryRow;
 
-export type GroundSectionId = "current_project" | "jobs" | "terminals" | "history";
+export type GroundSectionId =
+  | "needs_you"
+  | "queue"
+  | "current_project"
+  | "jobs"
+  | "terminals"
+  | "history";
 
 export type GroundSection = {
   id: GroundSectionId;
@@ -100,6 +114,15 @@ export function formatGroundElapsed(
   const hr = Math.floor(min / 60);
   if (hr < 48) return `${hr}h`;
   return `${Math.floor(hr / 24)}d`;
+}
+
+export function groundMissionUpdatedLabel(
+  iso: string | null | undefined,
+  nowMs = Date.now(),
+): string | null {
+  const elapsed = formatGroundElapsed(iso, nowMs);
+  if (!elapsed) return null;
+  return elapsed === "just now" ? "just now" : `${elapsed} ago`;
 }
 
 export function groundDisclosureDefaultOpen(activeCount: number): boolean {

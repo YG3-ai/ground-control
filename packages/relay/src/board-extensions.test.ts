@@ -23,7 +23,7 @@ import { brainCorpusPresentation, formatBrainReadTime } from "./board-brain-corp
 import { clearGrowthCache, getGrowthFeed } from "./board-extensions/growth.js";
 import { resolveBoardExtensionPaths } from "./board-extensions/paths.js";
 
-const REAL_BRAIN_ROOT = "/Users/partha/second-brain";
+const REAL_BRAIN_ROOT = "/Users/YOU/second-brain";
 const haveRealBrainCli =
   existsSync(join(REAL_BRAIN_ROOT, ".venv/bin/python")) &&
   existsSync(join(REAL_BRAIN_ROOT, "brain.py"));

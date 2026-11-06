@@ -157,16 +157,16 @@ export class TerminalSessionManager {
         const support = this.probeModelSupport("cursor", command);
         args = ["--trust", "--workspace", input.workspacePath];
         modelMeta = this.applyModel(input.model, support, args);
-      } else if (input.kind === "kimi") {
-        const resolved = resolveExecutable(input.kimiBinary, "kimi");
-        command = resolved.path;
-        const support = this.probeModelSupport("kimi", command);
-        args = [];
-        modelMeta = this.applyModel(input.model, support, args);
-      } else {
+      } else if (input.kind === "codex") {
         const resolved = resolveExecutable(input.codexBinary, "codex");
         command = resolved.path;
         const support = this.probeModelSupport("codex", command);
+        args = ["-C", input.workspacePath];
+        modelMeta = this.applyModel(input.model, support, args);
+      } else {
+        const resolved = resolveExecutable(input.kimiBinary, "kimi");
+        command = resolved.path;
+        const support = this.probeModelSupport("kimi", command);
         args = [];
         modelMeta = this.applyModel(input.model, support, args);
       }
@@ -388,7 +388,7 @@ export class TerminalSessionManager {
         // ignore
       }
       try {
-        live.pty.kill();
+        live.pty.kill("SIGKILL");
       } catch {
         // ignore
       }
@@ -405,12 +405,14 @@ export class TerminalSessionManager {
 
   /** Kill all PTYs (worker shutdown). */
   disposeAll(): void {
+    // A late PTY callback must not emit into the closed worker event store.
+    this.onEvent = undefined;
     for (const id of [...this.sessions.keys()]) {
       const live = this.sessions.get(id);
       if (!live) continue;
       this.clearIdle(live);
       try {
-        live.pty?.kill();
+        live.pty?.kill("SIGKILL");
       } catch {
         // ignore
       }
@@ -425,11 +427,12 @@ export class TerminalSessionManager {
   }) {
     this.assertOwner(ownerId);
     const cursor = this.safeResolve(agentCfg.cursorBinary, "agent");
-    const kimi = this.safeResolve(agentCfg.kimiBinary, "kimi");
     const codex = this.safeResolve(agentCfg.codexBinary, "codex");
+    const kimi = this.safeResolve(agentCfg.kimiBinary, "kimi");
     const shell = this.safeResolve(process.env.SHELL ?? "/bin/zsh", "zsh");
+    const kinds: SessionKind[] = ["shell", "cursor", "codex"];
     return {
-      session_kinds: ["shell", "cursor", "kimi", "codex"] as SessionKind[],
+      session_kinds: kinds,
       supported_control_keys: SUPPORTED_CONTROL_KEYS,
       restart_behavior:
         "Interactive PTY sessions live only in the worker process. Worker restart ends them; managed jobs remain in SQLite with in-flight marked failed.",
@@ -438,16 +441,17 @@ export class TerminalSessionManager {
       binaries: {
         shell,
         cursor,
-        kimi,
         codex,
+        kimi,
       },
       models: {
         cursor: cursor.ok
           ? this.probeModelSupport("cursor", cursor.path)
           : null,
-        kimi: kimi.ok ? this.probeModelSupport("kimi", kimi.path) : null,
         codex: codex.ok ? this.probeModelSupport("codex", codex.path) : null,
+        kimi: kimi.ok ? this.probeModelSupport("kimi", kimi.path) : null,
       },
+      kimi_retired_for_new_sessions: true,
     };
   }
 
@@ -492,7 +496,7 @@ export class TerminalSessionManager {
       live.record.error = "idle expired";
       live.record.state = "error";
       try {
-        live.pty?.kill();
+        live.pty?.kill("SIGKILL");
       } catch {
         // ignore
       }

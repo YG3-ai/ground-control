@@ -48,6 +48,19 @@ export const DEFAULT_CURSOR_POLICY: AgentUsagePolicy = {
   cooldown_after_rate_limit_sec: 600,
 };
 
+/** Conservative pacing for local Codex CLI execution. */
+export const DEFAULT_CODEX_POLICY: AgentUsagePolicy = {
+  window_sec: 5 * 3600,
+  max_starts_per_window: 30,
+  min_gap_sec: 30,
+  max_concurrent: 1,
+  default_model: null,
+  research_model: null,
+  implement_model: null,
+  research_mode: null,
+  cooldown_after_rate_limit_sec: 10 * 60,
+};
+
 /** Conservative pacing so the rolling 5h Kimi window lasts a workday. */
 export const DEFAULT_KIMI_POLICY: AgentUsagePolicy = {
   window_sec: 5 * 3600,
@@ -59,19 +72,6 @@ export const DEFAULT_KIMI_POLICY: AgentUsagePolicy = {
   implement_model: "kimi-code/k3-256k",
   research_mode: null,
   cooldown_after_rate_limit_sec: 30 * 60,
-};
-
-/** Conservative defaults for ChatGPT-plan-backed Codex CLI usage. */
-export const DEFAULT_CODEX_POLICY: AgentUsagePolicy = {
-  window_sec: 5 * 3600,
-  max_starts_per_window: 30,
-  min_gap_sec: 30,
-  max_concurrent: 1,
-  default_model: null,
-  research_model: null,
-  implement_model: null,
-  research_mode: null,
-  cooldown_after_rate_limit_sec: 10 * 60,
 };
 
 function nowIso(): string {
@@ -95,6 +95,29 @@ export function looksLikeRateLimit(text: string): boolean {
     t.includes("rolling window") ||
     /\b429\b/.test(t)
   );
+}
+
+/** Treat only a failed executor error line as a provider limit. Job stdout can
+ * contain quoted code, tests, and commentary which are not provider signals. */
+export function isProviderRateLimitFailure(input: {
+ exitCode: number | null; stdout?: string; stderr: string;
+}): boolean {
+ if (input.exitCode === 0) return false;
+ const providerError = (line: string): boolean => {
+  try {
+   const event = JSON.parse(line) as Record<string, unknown>;
+   if (!["error", "turn.failed"].includes(String(event.type)) && !event.error) return false;
+   return looksLikeRateLimit(JSON.stringify(event.error ?? event.message ?? event));
+  } catch { return false; }
+ };
+ if ((input.stdout ?? "").split(/\r?\n/).some(providerError)) return true;
+ return input.stderr.split(/\r?\n/).some((line) => {
+  const text = line.trim().toLowerCase();
+  if (text.startsWith("{")) return providerError(line);
+  if (!text || !looksLikeRateLimit(text)) return false;
+  return /^(?:error|fatal|http\s*429|429\b)/.test(text) ||
+    /\b(?:status|code)\s*[:=]?\s*429\b/.test(text);
+ });
 }
 
 export class UsageLedger {

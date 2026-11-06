@@ -2,8 +2,20 @@
 # Local + public tunnel status (no secrets printed).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck disable=SC1091
-if [[ -f "$ROOT/.env" ]]; then set -a && source "$ROOT/.env" && set +a; fi
+NVM_NODE="$HOME/.nvm/versions/node/v20.20.0/bin/node"
+READ_ENV_NODE="${NVM_NODE}"
+if [[ ! -x "$READ_ENV_NODE" ]]; then
+  READ_ENV_NODE="$(command -v node || true)"
+fi
+if [[ -n "${READ_ENV_NODE:-}" ]]; then
+  eval "$("$READ_ENV_NODE" --input-type=module -e "
+import { parseLocalEnvFile } from './scripts/load-local-env.mjs';
+const env = parseLocalEnvFile('$ROOT') ?? {};
+const esc = (s) => \"'\" + String(s).replace(/'/g, \"'\\\\''\") + \"'\";
+if (env.PUBLIC_BASE_URL) console.log('export PUBLIC_BASE_URL=' + esc(env.PUBLIC_BASE_URL));
+if (env.RELAY_PORT) console.log('export RELAY_PORT=' + esc(env.RELAY_PORT));
+" 2>/dev/null || true)"
+fi
 
 PORT="${RELAY_PORT:-8787}"
 UID_NUM="$(id -u)"

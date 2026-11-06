@@ -18,6 +18,14 @@ worker:
     default_idle_sec: 3600
     default_cols: 120
     default_rows: 40
+  local_control:
+    enabled: true
+    bind: 127.0.0.1
+    port: 8788
+    browser_requires_approval: true
+    approval_timeout_sec: 120
+    approval_pending_expiry_sec: 0
+    owner_control_mode: off
   isolation:
     backend: "docker"
     image: "agent-control-mock:local"
@@ -26,9 +34,20 @@ worker:
     read_only_rootfs: true
     memory_mb: 1024
     cpus: 2
+  conservation:
+    enabled: true
+    agent_fallback_order: [codex, cursor]
+    # Per-class limits + routing — see packages/shared/src/conservation.ts defaults
 
 advisor:
   enabled: false
+  # When true, mission_queue_tick + mission_supervisor_tick run inside the worker job tick (not a second daemon).
+  poll_missions_sec: 2
+  default_max_step_retries: 2
+  queue_max_concurrent: 1
+  queue_claim_lease_sec: 300
+  # When true (or per-mission queue_auto_review marker), verifying projects auto-stage ready_for_review when evidence gates pass.
+  queue_auto_review: false
 
 agents:
   mock:
@@ -38,8 +57,19 @@ agents:
     enabled: true
     adapter: cursor
     binary: /Users/YOU/.local/bin/agent
-  kimi:
+  codex:
     enabled: true
+    adapter: codex
+    binary: /Users/YOU/.local/bin/codex
+    usage:
+      max_concurrent: 1
+      max_starts_per_window: 25
+      min_gap_sec: 20
+      window_sec: 18000
+      default_reasoning_effort: medium
+  kimi:
+    # Retired for new work — historical jobs only; files remain on disk.
+    enabled: false
     adapter: kimi
     binary: /Users/YOU/.kimi-code/bin/kimi
   codex:
